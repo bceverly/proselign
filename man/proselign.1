@@ -126,6 +126,18 @@ Upper bound on the size of each rewritten chunk. Default 1500.
 .B \-\-json\-diagnostics
 Write a JSON run report to standard error.
 .TP
+.BI \-\-output " FILE\fR, " \-o " FILE"
+Write the result to
+.I FILE
+instead of standard output; it must not be an input file. A Markdown
+input is written back as Markdown, with headings, code, tables and front
+matter copied unchanged. Required when the input is a
+.B .docx
+file: its prose is rewritten while styles, headers, footers, tables,
+images and character formatting are kept. Headings, captions, links,
+fields, tracked changes and paragraphs that are not full sentences are
+left as they are. The input file is never overwritten.
+.TP
 .BI \-\-config " FILE"
 Read settings from
 .I FILE
@@ -134,6 +146,11 @@ instead of
 .TP
 .B \-\-no\-config
 Ignore the settings file.
+.TP
+.B \-\-no\-progress
+Hide the progress line. By default, when standard error is a terminal,
+an animated line shows how many chunks or paragraphs are done, the
+elapsed time and an estimate of the time left.
 .SH ENVIRONMENT
 .TP
 .B PROSELIGN_BACKEND\fR, \fBPROSELIGN_ENDPOINT\fR, \fBPROSELIGN_MODEL
@@ -159,9 +176,10 @@ INI settings for rewrites. Section
 sets
 .BR voice ,
 .BR strength ,
-.B format
+.BR format ,
+.B strict
 and
-.BR strict ;
+.BR progress ;
 .B [backend]
 sets
 .BR backend ,
@@ -178,7 +196,14 @@ switches
 .B semicolons
 and
 .B ai_artifact_filter
-on or off. Command-line options override environment variables, which
+on or off, and sets
+.B first_person
+to
+.BR voice ,
+.B plural
+(always we/us/our) or
+.B singular
+(I/me/my). Command-line options override environment variables, which
 override this file. The file is refused if other users can write to it.
 A commented sample is installed as
 .IR /usr/share/doc/proselign/examples/proselignrc .
@@ -207,6 +232,7 @@ Backend error: the inference endpoint is unreachable or replied badly.
 proselign train \-\-voice Bryan ~/Documents/Writing/
 cat draft.md | proselign \-\-voice Bryan > final.md
 proselign \-\-voice Bryan \-\-strict \-\-strength 0.3 < memo.txt
+proselign \-\-voice Bryan report.docx \-o report\-new.docx
 llama\-server \-m model.gguf \-\-port 8080 &
 .fi
 .SH SEE ALSO

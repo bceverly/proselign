@@ -206,3 +206,15 @@ def test_train_warns_about_unreadable_documents(corpus: Path, registry):
     assert code == EXIT_OK
     assert "warning: skipped" in err
     assert "damaged.docx: corrupt .docx archive" in err
+
+
+def test_markdown_file_to_markdown_output(trained, tmp_path: Path):
+    source = tmp_path / "notes.md"
+    source.write_text("# Notes\n\nSome **bold** prose.\n\n```\ncode\n```\n", "utf-8")
+    out = tmp_path / "notes-updated.md"
+    argv = ["--voice", "Bryan", "--backend", "mock", str(source), "-o", str(out)]
+    code, stdout, err = run(argv, registry=trained)
+    assert (code, stdout) == (0, ""), err
+    assert out.read_text("utf-8") == source.read_text("utf-8")
+    code, _, err = run(argv[:-1] + [str(source)], registry=trained)
+    assert code == 2 and "must not be an input file" in err

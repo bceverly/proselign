@@ -5,7 +5,7 @@
 
 Pure standard library, no external programs: ``.docx`` (Office Open XML),
 ``.doc`` (Word 97-2003 and Word 6/95), ``.pdf`` and ``.mbox`` mailboxes.
-Plain-text formats are decoded as UTF-8.
+Plain text is decoded as UTF-8; Markdown also has its markup removed.
 """
 
 from __future__ import annotations
@@ -15,12 +15,14 @@ from pathlib import Path
 from proselign.ingest.formats.base import ExtractError
 from proselign.ingest.formats.doc import doc_text
 from proselign.ingest.formats.docx import docx_text
+from proselign.ingest.formats.markdown import markdown_text
 from proselign.ingest.formats.mbox import mbox_messages, mbox_text
 from proselign.ingest.formats.pdf import pdf_text
 
 TEXT_SUFFIXES = frozenset({".txt", ".md", ".markdown", ".text"})
 MAILBOX_SUFFIXES = frozenset({".mbox"})
 _EXTRACTORS = {".docx": docx_text, ".doc": doc_text, ".pdf": pdf_text, ".mbox": mbox_text}
+_MARKDOWN_SUFFIXES = frozenset({".md", ".markdown"})
 SUPPORTED_SUFFIXES = TEXT_SUFFIXES | frozenset(_EXTRACTORS)
 
 __all__ = [
@@ -40,7 +42,8 @@ def extract_text(path: Path, data: bytes) -> str:
     """
     extractor = _EXTRACTORS.get(path.suffix.lower())
     if extractor is None:
-        return data.decode("utf-8", errors="replace")
+        text = data.decode("utf-8", errors="replace")
+        return markdown_text(text) if path.suffix.lower() in _MARKDOWN_SUFFIXES else text
     try:
         return extractor(data)
     except (ValueError, IndexError, KeyError, TypeError, OverflowError, MemoryError) as exc:

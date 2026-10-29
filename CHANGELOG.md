@@ -30,6 +30,18 @@ parts, `MAJOR.MINOR.PATCH.BUILD`, as in the SysManage projects.
   voice, strength, format and backend, plus style switches for passive voice,
   en dashes, em dashes, exclamation marks, semicolons and an AI-artifact
   filter. `--config FILE`, `--no-config` and `PROSELIGN_CONFIG` select it.
+- Rewrite Word documents in place: `proselign --voice NAME in.docx -o
+  out.docx` rewrites body and footnote prose while styles, headers, footers,
+  tables, images and run formatting (bold, italic, ...) are preserved
+  byte for byte. `--output`/`-o` also writes text results to a file.
+- `first_person = plural` in `~/.proselignrc` makes every rewrite speak as
+  "we/us/our" instead of "I/me/my" (`singular` and `voice` are the other
+  choices); stray singular pronouns are sent back for another attempt.
+- Markdown rewrites keep headings exactly as written, and training on `.md`
+  files measures only the prose, not the markup.
+- An animated progress line with elapsed time and an estimate of the time
+  left, on by default when stderr is a terminal; `--no-progress` or
+  `progress = off` in `~/.proselignrc` hides it.
 
 ### Changed
 - `proselign export` writes archives owner-only (0600) instead of 0644.

@@ -17,9 +17,12 @@ from typing import TextIO
 
 from proselign import config as config_mod
 from proselign import full_version
+from proselign import progress as progress_mod
 from proselign.errors import EXIT_ERROR, EXIT_OK, ProselignError, UsageError
 from proselign.inference import BACKENDS, make_backend
 from proselign.ingest.train import build_voice
+from proselign.paths import write_private_file
+from proselign.rewrite.docx import MAX_PACKAGE_BYTES, rewrite_docx
 from proselign.rewrite.engine import Options, Rewriter
 from proselign.voice.package import ARCHIVE_SUFFIX, export_voice, import_voice
 from proselign.voice.registry import Registry
@@ -69,6 +72,14 @@ def _add_rewrite_args(parser: argparse.ArgumentParser) -> None:
         "--config", type=Path, help="settings file (default: $PROSELIGN_CONFIG or ~/.proselignrc)"
     )
     parser.add_argument("--no-config", action="store_true", help="ignore the settings file")
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="hide the progress line (shown by default on a terminal)",
+    )
+    parser.add_argument(
+        "--output", "-o", type=Path, help="write here instead of stdout (required for .docx)"
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -165,17 +176,56 @@ def _cmd_rewrite(args: argparse.Namespace, registry: Registry, io: dict) -> int:
         },
     )
     rewriter = Rewriter(voice, backend, options)
+    if settings.progress and not args.no_progress and progress_mod.wanted(io["stderr"]):
+        rewriter.progress = progress_mod.Progress(io["stderr"])
     try:
+        if any(path.suffix.lower() == ".docx" for path in args.files):
+            return _rewrite_docx(args, rewriter, io)
+        if args.output and any(
+            str(f) != "-" and f.resolve() == args.output.resolve() for f in args.files
+        ):
+            raise UsageError("--output must not be an input file; the original is kept")
         result = rewriter.rewrite(_read_input(args.files, io["stdin"]))
     finally:
+        rewriter.progress.close()
         report = rewriter.report
         if args.json_diagnostics:
             print(json.dumps(report.__dict__, sort_keys=True), file=io["stderr"])
         else:
             for warning in report.warnings:
                 print(f"proselign: warning: {warning}", file=io["stderr"])
-    io["stdout"].write(result)
-    io["stdout"].flush()
+    if args.output:
+        write_private_file(args.output, result.encode("utf-8"))
+    else:
+        io["stdout"].write(result)
+        io["stdout"].flush()
+    return EXIT_OK
+
+
+def _rewrite_docx(args: argparse.Namespace, rewriter: Rewriter, io: dict) -> int:
+    """Rewrite one Word document into ``--output``, keeping its formatting."""
+    if len(args.files) != 1:
+        raise UsageError("rewrite one .docx file at a time")
+    source = args.files[0]
+    if args.output is None:
+        raise UsageError("a .docx input needs --output FILE.docx")
+    if args.output.resolve() == source.resolve():
+        raise UsageError("--output must not be the input file; the original is kept")
+    try:
+        if source.stat().st_size > MAX_PACKAGE_BYTES:
+            raise UsageError(f"{source} is too large to rewrite")
+        data = source.read_bytes()
+    except OSError as exc:
+        raise UsageError(f"cannot read {source}: {exc.strerror}") from exc
+    result, report = rewrite_docx(data, rewriter.rewrite_units)
+    rewriter.progress.close()
+    write_private_file(args.output, result)
+    kept = ", ".join(f"{count} {why}" for why, count in sorted(report.kept.items()))
+    print(
+        f"proselign: rewrote {report.rewritten} paragraph(s) -> {args.output}"
+        + (f"; left as they were: {kept}" if kept else ""),
+        file=io["stderr"],
+    )
     return EXIT_OK
 
 

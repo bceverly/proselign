@@ -20,6 +20,9 @@ format = markdown
 # Exit with status 4 instead of keeping the original text of a chunk that
 # fails the fidelity checks.
 strict = off
+# Animated progress line with an estimate of the time left (only shown on
+# an interactive terminal; --no-progress turns it off for one run).
+progress = on
 
 [backend]
 # openai-compat (llama.cpp, Ollama, vLLM, ...) or mock.
@@ -47,3 +50,8 @@ semicolons = on
 # and ellipsis characters the original did not use, invisible characters,
 # and stock phrasing (delve, tapestry, it's worth noting, furthermore, ...).
 ai_artifact_filter = on
+# Whose voice the text speaks in:
+#   voice    - follow the trained voice (default)
+#   plural   - always "we/us/our", never "I/me/my" (also: we)
+#   singular - "I/me/my" for the author (also: I)
+first_person = voice

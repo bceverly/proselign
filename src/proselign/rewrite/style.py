@@ -32,6 +32,8 @@ class StyleRules:
     exclamation_marks: bool = True
     semicolons: bool = True
     ai_filter: bool = True
+    # "voice" follows the profile; "plural" forces we/us/our; "singular" prefers I/me/my.
+    first_person: str = "voice"
 
 
 # Past participles that the passive heuristic would otherwise misread.
@@ -78,6 +80,13 @@ AI_PHRASES = (
     "vibrant",
     "bustling",
     "intricate",
+)
+_SINGULAR_RE = re.compile(r"\b(?:I|[Mm]e|[Mm]y|[Mm]ine|[Mm]yself)\b")
+# "Phase I", "Section I": a Roman numeral, not the pronoun.
+_NUMERAL_BEFORE = re.compile(
+    r"(?:phase|section|part|chapter|title|article|class|type|tier|stage|level|appendix"
+    r"|exhibit|schedule|volume|book|world war)\s+\Z",
+    re.IGNORECASE,
 )
 _AI_PHRASE_RE = re.compile(
     r"\b(?:" + "|".join(re.escape(p) for p in AI_PHRASES) + r")\b", re.IGNORECASE
@@ -162,11 +171,7 @@ def _rate_directives(m: dict, rules: StyleRules) -> list[str]:
         out.append("Use contractions occasionally, not in every sentence.")
     else:
         out.append("Avoid contractions; write words out in full.")
-    first = m.get("first_person_per_1k", 0)
-    if first >= 30:
-        out.append("Write in the first person (I, we) often.")
-    elif first < 5:
-        out.append("Keep the author out of it; avoid I and we.")
+    out.extend(_person_directives(m.get("first_person_per_1k", 0), rules))
     second = m.get("second_person_per_1k", 0)
     if second >= 8:
         out.append("Address the reader directly as you.")
@@ -182,6 +187,21 @@ def _rate_directives(m: dict, rules: StyleRules) -> list[str]:
     elif m.get("passive_per_1k", 0) < 5:
         out.append("Strongly prefer the active voice.")
     return out
+
+
+def _person_directives(first: float, rules: StyleRules) -> list[str]:
+    if rules.first_person == "plural":
+        return [
+            "Write in the first person plural only: we, us, our, ours, ourselves. Never use "
+            "I, me, my, mine or myself; 'I think' becomes 'we think'."
+        ]
+    if rules.first_person == "singular":
+        return ["Speak for the author in the first person singular: I, me, my."]
+    if first >= 30:
+        return ["Write in the first person (I, we) often."]
+    if first < 5:
+        return ["Keep the author out of it; avoid I and we."]
+    return []
 
 
 def _punctuation_directives(punct: dict, rules: StyleRules) -> list[str]:
@@ -271,6 +291,19 @@ def passive_phrases(text: str) -> list[str]:
     ]
 
 
+def singular_pronouns(text: str) -> list[str]:
+    """First person singular pronouns outside protected spans, in order, once each."""
+    plain = _strip_protected(text)
+    found: list[str] = []
+    for match in _SINGULAR_RE.finditer(plain):
+        word = match.group(0)
+        if word == "I" and _NUMERAL_BEFORE.search(plain[: match.start()]):
+            continue
+        if word not in found:
+            found.append(word)
+    return found
+
+
 def violations(source: str, candidate: str, rules: StyleRules) -> list[str]:
     """Rule breaches in ``candidate`` that only another attempt can fix."""
     problems = []
@@ -284,6 +317,12 @@ def violations(source: str, candidate: str, rules: StyleRules) -> list[str]:
     for allowed, char, name in banned:
         if not allowed and (char in plain or (char == "\u2014" and " -- " in plain)):
             problems.append(f"rephrase to use no {name}")
+    if rules.first_person == "plural":
+        found = singular_pronouns(candidate)
+        if found:
+            problems.append(
+                "use the first person plural (we, us, our) instead of: " + ", ".join(found)
+            )
     if not rules.passive_voice:
         found = passive_phrases(candidate)
         if found:

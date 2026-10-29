@@ -18,8 +18,10 @@ _PATTERNS = {
     "url": re.compile(r"\b(?:https?|ftp)://[^\s<>()\[\]]+[^\s<>()\[\].,;:!?'\"]"),
     "email": re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b"),
     "quotation": re.compile(r"\"[^\"\n]{1,400}\"|“[^”\n]{1,400}”"),
-    "citation": re.compile(r"\[\d+(?:[,–-]\s*\d+)*\]|\[@[\w:-]+\]"),
+    "citation": re.compile(r"(?<!\[)\[\d+(?:[,–-]\s*\d+)*\](?!\])|\[@[\w:-]+\]"),
     # Thousands separators only between digits: "42, all" is the number 42.
+    # Paragraph markers and formatting tags used when rewriting .docx files.
+    "markup": re.compile(r"\[\[\d+\]\]|</?s\d+>"),
     "number": re.compile(r"(?<![\w.])[-+]?\$?\d(?:[\d,]*\d)?(?:\.\d+)?%?(?![\w])"),
 }
 
@@ -42,11 +44,15 @@ def missing(source: str, rewrite: str) -> list[str]:
         got = have.get((kind, token), 0)
         if got < count:
             problems.append(f"{kind} {token!r} appears {count}x in the source but {got}x after")
+    for (kind, token), got in sorted(have.items()):
+        # Markers and formatting tags must not be invented either.
+        if kind == "markup" and got > want.get((kind, token), 0):
+            problems.append(f"{kind} {token!r} is not in the source; remove it")
     return problems
 
 
 # Spans that style fixes must leave byte for byte as they are.
-_VERBATIM_KINDS = ("inline_code", "url", "email", "quotation")
+_VERBATIM_KINDS = ("inline_code", "url", "email", "quotation", "markup")
 
 
 def protected_spans(text: str) -> list[tuple[int, int]]:

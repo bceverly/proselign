@@ -25,7 +25,7 @@ MAX_CONFIG_BYTES = 64 * 1024
 
 _STRINGS = {("rewrite", "voice"), ("backend", "backend"), ("backend", "endpoint")}
 _STRINGS |= {("backend", "model"), ("rewrite", "format")}
-_BOOLEANS = {("rewrite", "strict"), ("backend", "offline")}
+_BOOLEANS = {("rewrite", "strict"), ("rewrite", "progress"), ("backend", "offline")}
 # [style] key -> StyleRules field
 _STYLE_KEYS = {
     "passive_voice": "passive_voice",
@@ -46,6 +46,7 @@ class Config:  # pylint: disable=too-many-instance-attributes  # one per setting
     strength: float | None = None
     text_format: str | None = None
     strict: bool = False
+    progress: bool = True
     backend: str | None = None
     endpoint: str | None = None
     model: str | None = None
@@ -87,7 +88,7 @@ def load(path: Path | None = None) -> Config:
 
 def _from_parser(parser: configparser.ConfigParser, path: Path) -> Config:
     config = Config(path=path)
-    style: dict[str, bool] = {}
+    style: dict[str, bool | str] = {}
     for section in parser.sections():
         for key in parser[section]:
             try:
@@ -100,7 +101,7 @@ def _from_parser(parser: configparser.ConfigParser, path: Path) -> Config:
 
 def _apply(
     config: Config,
-    style: dict[str, bool],
+    style: dict[str, bool | str],
     parser: configparser.ConfigParser,
     section: str,
     key: str,
@@ -115,5 +116,11 @@ def _apply(
         config.strength = parser.getfloat(section, key)
     elif section == "style" and key in _STYLE_KEYS:
         style[_STYLE_KEYS[key]] = parser.getboolean(section, key)
+    elif item == ("style", "first_person"):
+        value = parser.get(section, key).strip().lower()
+        value = {"we": "plural", "i": "singular"}.get(value, value)
+        if value not in ("voice", "plural", "singular"):
+            raise ValueError("must be voice, plural (we) or singular (I)")
+        style["first_person"] = value
     else:
         config.warnings.append(f"{config.path}: ignoring unknown setting [{section}] {key}")

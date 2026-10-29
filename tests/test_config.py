@@ -147,3 +147,17 @@ def test_cli_without_any_voice(trained):
     code, _, err = run(["rewrite", "--backend", "mock"], "x", registry=trained)
     assert code == EXIT_USAGE
     assert "no voice given" in err
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [("we", "plural"), ("Plural", "plural"), ("I", "singular"), ("voice", "voice")],
+)
+def test_first_person_setting(tmp_path: Path, value, expected):
+    settings = config_mod.load(_rc(tmp_path, f"[style]\nfirst_person = {value}\n"))
+    assert settings.rules.first_person == expected
+
+
+def test_first_person_setting_rejects_nonsense(tmp_path: Path):
+    with pytest.raises(UsageError, match="plural"):
+        config_mod.load(_rc(tmp_path, "[style]\nfirst_person = they\n"))

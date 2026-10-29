@@ -558,3 +558,23 @@ def test_mbox_list_items_become_paragraphs():
         "Points:\n\n * first point\n   wraps here\n\n- second\n\n2) third\nNot a list - just text."
     ]
     assert html_text("<p>Intro</p><ul><li>one</li><li>two</li></ul>") == "Intro\n\none\n\ntwo"
+
+
+# --- markdown ---------------------------------------------------------------
+
+
+def test_markdown_markup_is_removed_for_training():
+    source = (
+        "---\ntitle: x\n---\n# Heading One\n"
+        "Intro with **bold**, *it*, _under_ and ~~gone~~ words.\n"
+        "Setext\n======\n\n- first item\n* second item\n1. third item\n- [x] done item\n\n"
+        "A [link](http://example.com) and [ref][r] and ![img](a.png) and `code` and <b>tag</b>.\n"
+        "snake_case_name and 2*3*4 stay.\n\n```python\nprint('no')\n```\n\n    indented code\n\n"
+        "| a | b |\n|---|---|\n\n***\n[r]: http://example.com\n"
+    )
+    assert extract_text(Path("n.md"), source.encode()) == (
+        "Heading One\n\nIntro with bold, it, under and gone words.\n\nSetext\n\n"
+        "first item\n\nsecond item\n\nthird item\n\ndone item\n\n"
+        "A link and ref and  and code and tag.\nsnake_case_name and 2*3*4 stay."
+    )
+    assert extract_text(Path("n.txt"), b"# kept **as is**") == "# kept **as is**"

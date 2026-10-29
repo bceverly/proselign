@@ -158,3 +158,10 @@ def test_backend_defaults():
 def test_extract_input_requires_matching_nonce():
     assert extract_input("no markers") is None
     assert extract_input("<<<END_PROSELIGN_INPUT_0123456789abcdef>>>") is None
+
+
+def test_markdown_headings_are_never_rewritten():
+    text = "# Title\nBody right under it.\n\nSetext\n------\n\n  ### Third #\n\nMore prose.\n"
+    prose = [seg.text for seg in segment(text) if seg.prose]
+    assert prose == ["Body right under it.\n", "More prose.\n"]
+    assert "".join(seg.text for seg in segment(text)) == text

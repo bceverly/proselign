@@ -119,6 +119,8 @@ proselign --voice Bryan --strict --strength 0.3 &lt; contract-summary.md</code><
             <tr><td><code>--seed N</code></td><td>Sampling seed for reproducible runs (0&ndash;4294967295).</td></tr>
             <tr><td><code>--max-chunk-tokens N</code></td><td>Upper bound on each rewritten chunk. Default 1500.</td></tr>
             <tr><td><code>--json-diagnostics</code></td><td>Write a JSON run report to stderr.</td></tr>
+            <tr><td><code>--output FILE</code>, <code>-o FILE</code></td><td>Write the result to <code>FILE</code> instead of stdout. Required for a <code>.docx</code> input.</td></tr>
+            <tr><td><code>--no-progress</code></td><td>Hide the animated progress line (done/total, elapsed time, estimated time left) that is shown on a terminal by default.</td></tr>
             <tr><td><code>--config FILE</code>, <code>--no-config</code></td><td>Read settings from another file, or ignore <code>~/.proselignrc</code>.</td></tr>
           </tbody>
         </table>
@@ -138,6 +140,13 @@ proselign --voice Bryan --strict --strength 0.3 &lt; contract-summary.md</code><
           </tbody>
         </table>
       </div>
+
+      <h2 id="markdown">Markdown documents</h2>
+      <p><code>proselign --voice Bryan notes.md -o notes-rewritten.md</code> rewrites the prose of a Markdown file and writes Markdown back. Headings, front matter, fenced and indented code, tables and HTML blocks are copied unchanged; emphasis, links and list structure are kept around the rewritten words. When you train on <code>.md</code> files, the markup itself (<code>#</code>, <code>**</code>, link targets, list markers, code) is removed so that only your prose is measured.</p>
+
+      <h2 id="docx">Word documents</h2>
+      <p><code>proselign --voice Bryan report.docx -o report-rewritten.docx</code> rewrites the prose of a Word document and leaves everything else as it was: styles, numbering, headers and footers, tables, images, comments and section settings are copied byte for byte. Only the body text and footnotes are edited, one paragraph at a time, and bold, italic and other formatting inside a paragraph travels with the words it marks.</p>
+      <p>A paragraph is left alone when it is a heading, title, caption or table of contents entry; when it is not a full sentence (subject lines, labels, most table cells); or when it holds fields, links, images, tabs, line breaks, hidden text or tracked changes. A summary of what was rewritten and what was kept goes to stderr. The original file is never overwritten.</p>
 
       <h2 id="fidelity">Fidelity checks</h2>
       <p>Before a chunk is rewritten, Proselign records its protected tokens: numbers and currency, percentages, URLs, e-mail addresses, quotations, citations like <code>[3]</code> and inline code. After the rewrite, every token must still be present as many times as before. A failure is retried with the specific problems as feedback; if retries fail, the original text is kept and a warning goes to stderr, or with <code>--strict</code> the run fails with exit status 4.</p>
@@ -186,7 +195,8 @@ en_dashes = off          # ranges become 2019-2021
 em_dashes = off          # the model rephrases; commas as a last resort
 exclamation_marks = on
 semicolons = on
-ai_artifact_filter = on  # preambles, sign-offs, stock phrasing, curly quotes</code></pre>
+ai_artifact_filter = on  # preambles, sign-offs, stock phrasing, curly quotes
+first_person = plural    # "we/us/our", never "I/me/my" (voice, plural or singular)</code></pre>
       <p>Rules the model can break are checked after every attempt and fed back for another try; punctuation still left at the end is replaced mechanically. Quotations, inline code, URLs and e-mail addresses are never altered.</p>
 
       <h2 id="security">Security &amp; privacy</h2>

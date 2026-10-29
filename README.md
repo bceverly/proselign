@@ -55,14 +55,16 @@ transfer tool with a hard rule that meaning comes first.
   never reach the model.
 - **Your house style on top.** `~/.proselignrc` sets a default voice and
   backend and switches style rules on or off: passive voice, en and em dashes,
-  exclamation marks, semicolons, and a filter for common AI artifacts
-  (preambles, sign-offs, stock phrasing). See
+  exclamation marks, semicolons, first person plural ("we" instead of "I"),
+  and a filter for common AI artifacts (preambles, sign-offs, stock phrasing). See
   [`examples/proselignrc`](examples/proselignrc).
 - **No runtime dependencies** beyond the Python standard library.
 
 | Command | Purpose |
 |---|---|
 | `proselign --voice NAME [FILE...]` | Rewrite stdin (or files) in a voice (`--voice` may come from `~/.proselignrc`) |
+| `proselign --voice NAME notes.md -o new.md` | Rewrite Markdown, keeping headings, code, tables, links and front matter as they are |
+| `proselign --voice NAME report.docx -o new.docx` | Rewrite a Word document's prose, keeping its formatting, styles, headers, footers, tables and images |
 | `proselign train --voice NAME PATH...` | Learn a voice from `.txt`, `.md`, `.docx`, `.doc` and `.pdf` documents and `.mbox` sent-mail mailboxes (`--append` to extend) |
 | `proselign voices` | List voices |
 | `proselign inspect NAME` | Print a voice profile as JSON |

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 
 from proselign.errors import UsageError, ValidationError
 from proselign.inference.base import Backend
+from proselign.progress import NoProgress
 from proselign.rewrite import protect, style
 from proselign.rewrite.prompt import build_messages
 from proselign.rewrite.style import StyleRules
@@ -23,6 +24,9 @@ from proselign.voice.profile import Voice
 MAX_CHUNK_TOKENS = 1_000_000
 
 _FENCE_OPEN_RE = re.compile(r"^(\s{0,3})(`{3,}|~{3,})")
+_ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
+_SETEXT_UNDERLINE_RE = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
+_UNIT_MARK_RE = re.compile(r"\[\[(\d+)\]\]")
 
 
 @dataclass
@@ -73,6 +77,8 @@ def _is_verbatim_block(block: str) -> bool:
         return True  # pipe table
     if lines and all(ln.startswith(("    ", "\t")) for ln in lines):
         return True  # indented code
+    if len(lines) == 2 and _SETEXT_UNDERLINE_RE.match(lines[1]):
+        return True  # setext heading (Title / =====)
     return False
 
 
@@ -122,7 +128,10 @@ def segment(text: str, text_format: str = "markdown") -> list[Segment]:
             segments.append(Segment("".join(lines[i:end]), False))
             i = end
             continue
-        if line.strip():
+        if _ATX_HEADING_RE.match(line):
+            flush()
+            segments.append(Segment(line, False))  # headings stay as written
+        elif line.strip():
             block.append(line)
         else:
             flush()
@@ -149,6 +158,7 @@ class Rewriter:
         self.backend = backend
         self.options = options or Options()
         self.report = Report()
+        self.progress = NoProgress()  # the CLI swaps in a visible one
 
     def _temperature(self) -> float:
         return round(0.1 + 0.6 * self.options.strength, 2)
@@ -158,6 +168,18 @@ class Rewriter:
         if not core:
             return source
         self.report.chunks += 1
+        result, problems = self._attempt(core)
+        if result is not None:
+            return lead + result + trail
+        detail = _summarize(problems)
+        if self.options.strict:
+            raise ValidationError(f"rewrite failed fidelity checks: {detail}")
+        self.report.fallbacks += 1
+        self.report.warnings.append(f"kept original text for one chunk: {detail}")
+        return source
+
+    def _attempt(self, core: str) -> tuple[str | None, list[str]]:
+        """The best faithful rewrite of ``core``, or None and the last problems."""
         rules = self.options.rules
         feedback: list[str] | None = None
         best: str | None = None  # faithful, but still breaking a style rule
@@ -173,21 +195,16 @@ class Rewriter:
                 if not problems:
                     if attempt:
                         self.report.repaired += 1
-                    return lead + candidate + trail
+                    return candidate, []
                 best = style.punctuate(candidate, rules)
             feedback = problems
 
-        detail = "; ".join(feedback or [])
         if best is not None and not protect.missing(core, best):
             remaining = style.violations(core, best, rules)
             if remaining:
-                self.report.warnings.append(f"style rules not fully met: {'; '.join(remaining)}")
-            return lead + best + trail
-        if self.options.strict:
-            raise ValidationError(f"rewrite failed fidelity checks: {detail}")
-        self.report.fallbacks += 1
-        self.report.warnings.append(f"kept original text for one chunk: {detail}")
-        return source
+                self.report.warnings.append(f"style rules not fully met: {_summarize(remaining)}")
+            return best, []
+        return None, feedback or []
 
     def _chunks(self, segments: list[Segment]) -> list[Segment]:
         """Merge adjacent prose (and the blank lines between) up to the token budget."""
@@ -207,9 +224,73 @@ class Rewriter:
                 merged.append(Segment(seg.text, seg.prose))
         return merged
 
+    def rewrite_units(self, units: list[str]) -> list[str]:
+        """Rewrite independent paragraphs (of a .docx), returning one result each.
+
+        Paragraphs travel in token-bounded batches, each prefixed ``[[n]]``;
+        a batch whose markers come back damaged is redone one paragraph at
+        a time.  Fidelity failures keep the original paragraph.
+        """
+        results = list(units)
+        self.progress.begin(len(units), "paragraphs")
+        for batch in self._unit_batches(units):
+            parts = None
+            if len(batch) > 1:
+                text = "\n\n".join(f"[[{n}]] {units[i]}" for n, i in enumerate(batch, 1))
+                rewritten, _ = self._attempt(text)
+                parts = None if rewritten is None else _split_units(rewritten, len(batch))
+                self.report.chunks += parts is not None
+            if parts is None:
+                parts = []
+                for i in batch:
+                    parts.append(self._rewrite_chunk(units[i]))
+                    self.progress.advance()
+            else:
+                self.progress.advance(len(batch))
+            for i, part in zip(batch, parts):
+                results[i] = part
+        return results
+
+    def _unit_batches(self, units: list[str]) -> list[list[int]]:
+        batches: list[list[int]] = []
+        size = 0
+        for i, unit in enumerate(units):
+            cost = self.backend.count_tokens(unit) + 4
+            if not batches or size + cost > self.options.max_chunk_tokens:
+                batches.append([])
+                size = 0
+            batches[-1].append(i)
+            size += cost
+        return batches
+
     def rewrite(self, text: str) -> str:
         """Rewrite ``text``, returning the full reassembled document."""
         out = []
-        for seg in self._chunks(segment(text, self.options.text_format)):
-            out.append(self._rewrite_chunk(seg.text) if seg.prose else seg.text)
+        chunks = self._chunks(segment(text, self.options.text_format))
+        self.progress.begin(sum(seg.prose for seg in chunks), "chunks")
+        for seg in chunks:
+            if seg.prose:
+                out.append(self._rewrite_chunk(seg.text))
+                self.progress.advance()
+            else:
+                out.append(seg.text)
         return "".join(out)
+
+
+def _split_units(text: str, count: int) -> list[str] | None:
+    """The paragraphs of a rewritten batch, or None unless markers 1..count
+    each appear once, in order."""
+    marks = list(_UNIT_MARK_RE.finditer(text))
+    if [int(m.group(1)) for m in marks] != list(range(1, count + 1)):
+        return None
+    if text[: marks[0].start()].strip():
+        return None
+    ends = [m.start() for m in marks[1:]] + [len(text)]
+    return [text[m.end() : end].strip() for m, end in zip(marks, ends)]
+
+
+def _summarize(problems: list[str], limit: int = 5) -> str:
+    """The first few problems, and how many more there were."""
+    shown = "; ".join(problems[:limit])
+    more = len(problems) - limit
+    return f"{shown}; and {more} more" if more > 0 else shown

@@ -229,3 +229,29 @@ def test_engine_mechanical_fix_keeps_quotations():
     backend = ScriptedBackend(['He said "a;b" ok; fine.'])
     rewriter = Rewriter(_voice(), backend, Options(rules=rules, max_repairs=0))
     assert rewriter.rewrite('He said "a;b".') == 'He said "a;b" ok. Fine.'
+
+
+def test_first_person_plural_directive_and_check():
+    plural = StyleRules(first_person="plural")
+    text = "\n".join(directives(_voice(), plural))
+    assert "first person plural only" in text
+    assert "first person (I, we) often" not in text
+    assert "first person singular" in "\n".join(
+        directives(_voice(), StyleRules(first_person="singular"))
+    )
+    assert violations("x", "I think my plan, and I'm sure of it, suits me.", plural) == [
+        "use the first person plural (we, us, our) instead of: I, my, me"
+    ]
+    clean_text = 'We think so. He said "I agree." Phase I ends; World War I too. Mine, sir?'
+    assert violations("x", clean_text, plural) == [
+        "use the first person plural (we, us, our) instead of: Mine"
+    ]
+    assert not violations("x", "We agree with our team.", plural)
+    assert not violations("x", "I agree.", StyleRules())
+
+
+def test_engine_asks_for_plural_until_it_gets_it():
+    backend = ScriptedBackend(["I agree with my team.", "We agree with our team."])
+    rewriter = Rewriter(_voice(), backend, Options(rules=StyleRules(first_person="plural")))
+    assert rewriter.rewrite("Agreed.") == "We agree with our team."
+    assert "instead of: I, my" in backend.prompts[1][1].content
