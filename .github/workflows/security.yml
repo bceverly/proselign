@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+name: Security
+
+# Everything `make security` runs, plus GitHub-native secret and dependency
+# scanning.  Runs on pushes, pull requests and weekly (new advisories land
+# even when the code does not change).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lucky13:
+    name: MITRE Lucky 13
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+      - name: Install hash-locked dev dependencies
+        run: |
+          python -m pip install --require-hashes --no-deps -r requirements-dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+      - name: MITRE "Lucky 13" unforgivable vulnerabilities (Christey 2007)
+        run: |
+          # Steve Christey (MITRE), "Unforgivable Vulnerabilities", Black Hat
+          # 2007: buffer overflow, XSS, directory traversal, remote file
+          # inclusion, SQL injection, world-writable files, direct request,
+          # authenticated=1, home-grown crypto, privilege escalation via Help,
+          # symlink following, default passwords, integer overflow.
+          # See tests/lucky13/conftest.py.
+          python -m pytest tests/lucky13 -m lucky13 -v --tb=short -p no:cacheprovider
+
+  static-analysis:
+    name: Bandit + Semgrep
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+      - name: Install hash-locked tooling
+        run: |
+          python -m pip install --require-hashes --no-deps -r requirements-dev.txt
+          python -m venv .venv-semgrep
+          .venv-semgrep/bin/pip install --require-hashes --no-deps -r requirements-semgrep.txt
+      - name: Bandit
+        run: python -m bandit -c pyproject.toml -r src scripts --severity-level low
+      - name: Semgrep (gating)
+        run: |
+          .venv-semgrep/bin/semgrep scan --error --metrics=off \
+            --config=p/default --config=p/security-audit --config=p/python \
+            --config=p/trailofbits --config=p/owasp-top-ten \
+            --sarif --output semgrep.sarif src scripts packaging
+      - name: Upload Semgrep results to code scanning
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@89a39a4e59826350b863aa6b6252a07ad50cf83e # v4
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  dependencies:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+      - name: Install hash-locked dev dependencies
+        run: python -m pip install --require-hashes --no-deps -r requirements-dev.txt
+      - name: pip-audit (every lock file; reviewed exceptions in .pip-audit-ignore)
+        run: python scripts/audit_deps.py
+      - name: Safety
+        if: env.SAFETY_API_KEY != ''
+        env:
+          SAFETY_API_KEY: ${{ secrets.SAFETY_API_KEY }}
+        run: |
+          python -m venv .venv-safety
+          .venv-safety/bin/pip install --require-hashes --no-deps -r requirements-safety.txt
+          .venv-safety/bin/safety scan --output screen
+
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: on-failure
+
+  secrets:
+    name: Secrets scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: TruffleHog (verified secrets only)
+        uses: trufflesecurity/trufflehog@ec1d9a6b4b7ce070eff34bd09e7cbd95ce1e2412 # main-2026-02-22
+        with:
+          extra_args: --only-verified

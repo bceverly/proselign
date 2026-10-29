@@ -1,0 +1,275 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+name: Build and Release
+
+# Runs when `make release` pushes a vW.X.Y.Z tag (four-part, like sysmanage):
+#   verify   -> the tag matches __version__; lint, Lucky 13 and tests pass
+#   build    -> Python sdist + wheel; .deb packages for amd64 and arm64 (native
+#               runners) and ppc64el and s390x (QEMU-emulated; no free runners)
+#   release  -> GitHub release with every artifact and SHA256SUMS
+#   launchpad-> signed source uploads to ppa:bceverly/proselign, one per
+#               supported Ubuntu LTS; Launchpad builds natively for amd64 and
+#               arm64 (full LLM support) and ppc64el and s390x (CPU-only tier).
+#
+# Secrets: LAUNCHPAD_GPG_KEY, LAUNCHPAD_GPG_PASSPHRASE, LAUNCHPAD_SSH_KEY
+# (see CONTRIBUTING.md).
+
+on:
+  push:
+    tags: ['v*.*.*.*']
+  workflow_dispatch:
+    inputs:
+      upload_to_launchpad:
+        description: 'Upload source packages to the PPA'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  DEBFULLNAME: Bryan C. Everly
+  DEBEMAIL: bceverly@gmail.com
+
+jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+      - name: Install hash-locked dev dependencies
+        run: |
+          python -m pip install --require-hashes --no-deps -r requirements-dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+      - name: Tag matches __version__
+        run: python scripts/check_version.py
+      - id: version
+        run: echo "version=$(python -c 'import proselign; print(proselign.__version__)')" >> "$GITHUB_OUTPUT"
+      - name: Lint
+        run: make lint VENV_ACTIVATE= PYTHON=python
+      - name: MITRE "Lucky 13" unforgivable vulnerabilities (Christey 2007)
+        run: python -m pytest tests/lucky13 -m lucky13 -v --tb=short -p no:cacheprovider
+      - name: Tests with coverage floor
+        run: make test VENV_ACTIVATE= PYTHON=python
+
+  build-python:
+    name: Python sdist + wheel
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+      - name: Build
+        run: |
+          python -m pip install --require-hashes --no-deps -r requirements-dev.txt
+          python -m build --no-isolation --outdir dist/
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: python-dist
+          path: dist/*
+
+  build-deb:
+    name: .deb (${{ matrix.arch }})
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # Built on the oldest supported LTS so the package installs on all of them.
+    container: ubuntu:22.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends build-essential debhelper \
+            dh-python python3-all python3-pytest dpkg-dev lintian
+      - name: Build
+        run: packaging/ubuntu/build.sh binary "${{ needs.verify.outputs.version }}"
+      - name: Lintian
+        run: lintian --fail-on error build/deb/proselign_*.deb
+      - name: Install and smoke test
+        run: |
+          apt-get install -y -qq ./build/deb/proselign_*_${{ matrix.arch }}.deb
+          proselign --version | grep -F "${{ needs.verify.outputs.version }}"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: deb-${{ matrix.arch }}
+          path: build/deb/proselign_*.deb
+
+  build-deb-emulated:
+    name: .deb (${{ matrix.arch }}, emulated)
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: ppc64el
+            platform: linux/ppc64le
+          - arch: s390x       # big-endian: the package's tests run there too
+            platform: linux/s390x
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: ${{ matrix.platform }}
+      - name: Build, lint and smoke test under emulation
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker run --rm --platform "${{ matrix.platform }}" -v "$PWD:/src" -w /src \
+            -e VERSION -e ARCH -e DEBFULLNAME -e DEBEMAIL ubuntu:22.04 sh -euc '
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends build-essential debhelper \
+                dh-python python3-all python3-pytest dpkg-dev lintian >/dev/null
+              packaging/ubuntu/build.sh binary "$VERSION"
+              lintian --fail-on error build/deb/proselign_*_"$ARCH".deb
+              apt-get install -y -qq ./build/deb/proselign_*_"$ARCH".deb >/dev/null
+              proselign --version | grep -F "$VERSION"
+            '
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: deb-${{ matrix.arch }}
+          path: build/deb/proselign_*.deb
+
+  release:
+    name: GitHub release
+    needs: [verify, build-python, build-deb, build-deb-emulated]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Checksums and notes
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          cd artifacts
+          sha256sum -- * > SHA256SUMS
+          cat > ../release_notes.md <<EOF
+          ## Proselign ${VERSION}
+
+          ### Install on Ubuntu 22.04 / 24.04 / 26.04
+          amd64 and arm64 (full support), ppc64el and s390x (CPU-only inference tier).
+          \`\`\`sh
+          sudo add-apt-repository ppa:bceverly/proselign
+          sudo apt update && sudo apt install proselign
+          \`\`\`
+          Or download the \`.deb\` for your architecture below.
+
+          ### Install with pip (Python 3.10+)
+          \`\`\`sh
+          pip install proselign-${VERSION}-py3-none-any.whl
+          \`\`\`
+
+          Verify downloads with \`sha256sum -c SHA256SUMS\`.
+          EOF
+      - uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+        with:
+          files: artifacts/*
+          body_path: release_notes.md
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  launchpad:
+    name: PPA upload (${{ matrix.series }})
+    needs: [verify, build-deb]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.upload_to_launchpad
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Ubuntu LTS releases whose Python (>= 3.10) the LLM stack supports.
+        # Architectures come from debian/control; enable the same four under
+        # the PPA's Processors settings.
+        series: [jammy, noble, resolute]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Packaging tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends devscripts debhelper dh-python \
+            python3-all dput-ng gnupg openssh-client python3-paramiko
+      - name: Import signing key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.LAUNCHPAD_GPG_KEY }}
+        run: |
+          # Accept the key armored or base64-encoded.
+          echo "$GPG_PRIVATE_KEY" | gpg --batch --import 2>/dev/null \
+            || echo "$GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
+          echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
+          echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
+          gpg-connect-agent reloadagent /bye
+          KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/ {print $5; exit}')
+          echo "GPG_KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
+      - name: SSH agent for SFTP upload
+        env:
+          SSH_KEY: ${{ secrets.LAUNCHPAD_SSH_KEY }}
+        run: |
+          # Launchpad's FTP endpoint silently drops uploads from GitHub
+          # runners (LP #1836059); SFTP is reliable.  paramiko ignores
+          # ~/.ssh/config, so the key goes into an agent.
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          ssh-keyscan -H ppa.launchpad.net >> ~/.ssh/known_hosts 2>/dev/null
+          eval "$(ssh-agent -s)"
+          echo "$SSH_KEY" | tr -d '\r' | ssh-add -
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> "$GITHUB_ENV"
+          echo "SSH_AGENT_PID=$SSH_AGENT_PID" >> "$GITHUB_ENV"
+      - name: dput profile
+        run: |
+          mkdir -p ~/.dput.d/profiles
+          cat > ~/.dput.d/profiles/launchpad.json <<'EOF'
+          {
+            "fqdn": "ppa.launchpad.net",
+            "incoming": "~bceverly/ubuntu/proselign/",
+            "method": "sftp",
+            "login": "bceverly",
+            "allow_unsigned_uploads": false
+          }
+          EOF
+      - name: Build, sign and upload source package
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          SERIES: ${{ matrix.series }}
+          GPG_PASSPHRASE: ${{ secrets.LAUNCHPAD_GPG_PASSPHRASE }}
+        run: |
+          packaging/ubuntu/build.sh source "$VERSION" "$SERIES"
+          cd build/deb
+          CHANGES="proselign_${VERSION}+ppa1~${SERIES}1_source.changes"
+          PASSFILE=$(mktemp)
+          printf '%s' "$GPG_PASSPHRASE" > "$PASSFILE"
+          debsign --re-sign -k"$GPG_KEY_ID" \
+            -p"gpg --batch --yes --pinentry-mode loopback --passphrase-file $PASSFILE" "$CHANGES"
+          rm -f "$PASSFILE"
+          for attempt in 1 2 3 4 5; do
+            dput -f launchpad "$CHANGES" < /dev/null && exit 0
+            echo "dput attempt $attempt failed; retrying in $((attempt * 30))s"
+            sleep $((attempt * 30))
+          done
+          exit 1

@@ -1,0 +1,122 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+name: CI
+
+# Lint, tests (with the 80% coverage floor) on every supported Python, and a
+# Debian package smoke test on every Ubuntu LTS.  All jobs run on standard
+# GitHub-hosted runners (free for public repositories).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+      - name: Install hash-locked dev dependencies
+        run: |
+          python -m pip install --require-hashes --no-deps -r requirements-dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+      - name: Install shellcheck
+        run: sudo apt-get install -y -qq shellcheck
+      - name: make lint
+        run: make lint VENV_ACTIVATE= PYTHON=python
+
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 = Ubuntu 22.04 LTS, 3.12 = 24.04 LTS, 3.14 = 26.04 LTS
+        python-version: ['3.10', '3.11', '3.12', '3.13', '3.14']
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install hash-locked dev dependencies
+        run: |
+          python -m pip install --require-hashes --no-deps -r requirements-dev.txt
+          python -m pip install --no-deps --no-build-isolation -e .
+      - name: MITRE "Lucky 13" unforgivable vulnerabilities (Christey 2007)
+        # Its own step so a regression is named here, not buried in the suite.
+        run: python -m pytest tests/lucky13 -m lucky13 -v --tb=short -p no:cacheprovider
+      - name: Tests with coverage floor
+        run: make test VENV_ACTIVATE= PYTHON=python
+      - name: Upload coverage report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: coverage
+          path: coverage.xml
+          retention-days: 7
+
+  deb:
+    name: Debian package (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:22.04', 'ubuntu:24.04', 'ubuntu:26.04']
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - name: Build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends build-essential debhelper \
+            dh-python python3-all python3-pytest dpkg-dev lintian
+      - name: Build (runs the test suite inside the package build)
+        run: packaging/ubuntu/build.sh binary
+      - name: Lintian
+        run: lintian --fail-on error build/deb/proselign_*.deb
+      - name: Install and smoke test
+        run: |
+          apt-get install -y -qq ./build/deb/proselign_*.deb
+          proselign --version
+          printf 'Hello, 42 worlds.\n' > /tmp/in.txt
+          # An unknown voice must fail with exit status 3 and a clean stdout.
+          status=0
+          proselign --voice nobody < /tmp/in.txt > /tmp/out.txt || status=$?
+          test "$status" -eq 3 && test ! -s /tmp/out.txt
+
+  deb-big-endian:
+    # s390x is the only big-endian architecture we ship; run the package build
+    # (and so the whole test suite) there on every push, under QEMU.
+    name: Debian package (s390x, emulated)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: linux/s390x
+      - name: Build and test under emulation
+        run: |
+          docker run --rm --platform linux/s390x -v "$PWD:/src" -w /src ubuntu:22.04 sh -euc '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends build-essential debhelper \
+              dh-python python3-all python3-pytest dpkg-dev >/dev/null
+            packaging/ubuntu/build.sh binary
+            apt-get install -y -qq ./build/deb/proselign_*_s390x.deb >/dev/null
+            proselign --version
+          '

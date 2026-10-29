@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+# Development, lint, test and security tooling: the INPUT to `make lock`, which
+# writes the hash-locked requirements-dev.txt that is actually installed.  The proselign runtime itself
+# has NO third-party dependencies; everything here is for contributors and CI.
+#
+# black is pinned because point releases reshape formatting, and a local / CI
+# version skew silently produces diffs that only surface in CI.
+pytest
+pytest-cov
+pylint
+black==26.10.1
+isort
+bandit[toml]
+pip-audit
+# safety: see requirements-safety.in (its own tool venv; it pins filelock<4).
+build
+# Editable install without build isolation needs the backend from the lock.
+setuptools>=61
+wheel
+# Generates the hash-locked requirements-*.txt files (make lock).
+uv
+# semgrep: see requirements-semgrep.txt (installed into its own tool venv).
+
+# Every fixed filelock (CVE-2026-1129xx series) needs Python 3.11+; on 3.10 no
+# fixed release exists, so the 3.10 test environment keeps 3.x (dev-only).
+filelock>=4.2.1 ; python_version >= "3.11"
+
+# The venv's own pip is audited too (make security).
+pip>=26.2.0

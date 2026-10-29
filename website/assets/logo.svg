@@ -1,0 +1,7 @@
+<!-- SPDX-License-Identifier: BSD-3-Clause -->
+<!-- Copyright (c) 2026 Bryan C. Everly -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Proselign">
+  <rect width="32" height="32" rx="7" fill="#2f5d50"/>
+  <path d="M8 10h16M8 15h11M8 20h16M8 25h8" stroke="#fbfaf7" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M22 14.5l3 3-3 3" fill="none" stroke="#9fd3bd" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

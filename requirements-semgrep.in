@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+# Input to `make lock`; the hash-locked .txt beside it is what gets installed.
+# Semgrep, installed into its OWN venv (.venv-semgrep) by `make security-semgrep`
+# -- never into the development venv, because semgrep pins several of its own
+# dependencies tightly and would otherwise hold shared packages back.
+#
+# Linux/macOS only: semgrep ships a compiled core with no BSD/Windows wheel.
+semgrep>=1.162.0 ; sys_platform == "linux" or sys_platform == "darwin"
+

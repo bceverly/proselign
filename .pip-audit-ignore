@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+# Reviewed pip-audit exceptions:  ID  EXPIRY(YYYY-MM-DD)  [lock file]  REASON
+# Expired entries fail `make security`; re-review rather than extend blindly.
+# Every entry below is scoped to an ISOLATED developer-tool venv: none of these
+# packages is a dependency of proselign itself, which has none at all.
+# Reviewed 2026-10-29.
+
+# diskcache (via llama-cpp-python): unsafe pickle loading from a writable cache
+# directory.  No fixed release exists.  llama.cpp's disk cache is opt-in and
+# not enabled by `make llm-serve`.
+PYSEC-2026-2447  2027-01-31  [requirements-llm.txt]  diskcache has no fix; disk prompt cache is never enabled
+
+# mcp and opentelemetry-api (via semgrep): semgrep pins mcp==1.29.0 and
+# opentelemetry-api<1.38 even in its newest release.  The semgrep venv only
+# runs a local scan over this repository's source (metrics off; the MCP server
+# is never started).  Drop these as soon as a semgrep release unpins them.
+CVE-2026-59951   2027-01-31  [requirements-semgrep.txt]  pinned by semgrep; MCP server never started
+CVE-2026-116684  2027-01-31  [requirements-semgrep.txt]  pinned by semgrep; MCP server never started
+CVE-2026-116685  2027-01-31  [requirements-semgrep.txt]  pinned by semgrep; MCP server never started
+CVE-2026-116686  2027-01-31  [requirements-semgrep.txt]  pinned by semgrep; MCP server never started
+CVE-2026-114603  2027-01-31  [requirements-semgrep.txt]  pinned by semgrep (<1.38); telemetry export unused
+
+# filelock (via safety): safety pins filelock<4.0 and every fixed filelock is
+# 4.x.  The safety venv only runs `safety scan`, a read-only dependency check.
+CVE-2026-112907  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112908  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112909  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112910  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112911  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112912  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112913  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112915  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112935  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112936  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112938  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112939  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv
+CVE-2026-112940  2027-01-31  [requirements-safety.txt]  pinned <4 by safety; isolated read-only scan venv

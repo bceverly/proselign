@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+[MAIN]
+jobs=0
+py-version=3.10
+
+[FORMAT]
+max-line-length=100
+max-module-lines=1000
+
+[DESIGN]
+max-args=6
+max-positional-arguments=6
+max-locals=15
+max-branches=12
+max-statements=50
+max-attributes=10
+
+[BASIC]
+good-names=i,j,k,_,io,ex,e
+
+[MESSAGES CONTROL]
+disable=
+    too-few-public-methods,
+    duplicate-code,
+    fixme

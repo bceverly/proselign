@@ -1,0 +1,167 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: BSD-3-Clause -->
+<!-- Copyright (c) 2026 Bryan C. Everly -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proselign: learn your writing style, align everything to it</title>
+  <meta name="description" content="Proselign is a local-first Unix filter that learns an author's prose style from their own documents and rewrites text in that voice without changing what it says.">
+  <meta property="og:title" content="Proselign">
+  <meta property="og:description" content="Learn your writing style. Align everything to it. Local-first, Unix-native, BSD licensed.">
+  <meta property="og:url" content="https://proselign.org/">
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/style.css">
+  <script src="assets/site.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="26" height="26"> proselign</a>
+      <nav class="nav" aria-label="Main">
+        <a href="#how">How it works</a>
+        <a href="#principles">Principles</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="docs/">Docs</a>
+        <a href="https://github.com/bceverly/proselign">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="hero">
+      <div class="wrap hero-grid">
+        <div>
+          <p class="eyebrow">Open source &middot; BSD 3-Clause</p>
+          <h1>Learn your writing style. Align everything to it.</h1>
+          <p class="lede">Proselign learns how <em>you</em> write from your own documents, then rewrites any text in that voice: same facts, same figures, same structure, your style. It runs on your machine as an ordinary Unix filter.</p>
+          <div class="cta">
+            <a class="btn btn-primary" href="docs/#install">Install</a>
+            <a class="btn btn-secondary" href="docs/">Read the docs</a>
+          </div>
+        </div>
+        <div class="terminal" aria-label="Example terminal session">
+          <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+<pre><span class="prompt">$ </span>proselign train --voice Bryan ~/Documents/Writing/
+<span class="dim">proselign: voice 'Bryan' learned from 214 document(s), 186,402 words</span>
+
+<span class="prompt">$ </span>cat team-draft.md | proselign --voice Bryan &gt; final.md
+
+<span class="prompt">$ </span>proselign --voice Bryan --strict --strength 0.3 &lt; memo.txt
+<span class="dim"># stdout: the rewrite, nothing else
+# stderr: diagnostics; exit 4 if a fact would change</span></pre>
+        </div>
+      </div>
+    </div>
+
+    <section id="why">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>One voice from many hands</h2>
+          <p>Reports, proposals and documentation are rarely written by one person, but they should read as if they were. Proselign gives a document a consistent authorial voice without asking anyone to give up their facts.</p>
+        </div>
+        <div class="grid-3">
+          <div class="card">
+            <h3>Teams merging drafts</h3>
+            <p>Five contributors, one document. Rewrite each section in the lead author's voice so the result reads as a whole.</p>
+          </div>
+          <div class="card">
+            <h3>Your own backlog</h3>
+            <p>Notes, emails and first drafts written in a hurry, brought into line with how you write when you have time.</p>
+          </div>
+          <div class="card">
+            <h3>Technical &amp; professional prose</h3>
+            <p>Engineers, researchers, attorneys and consultants: Markdown, code, citations and numbers pass through intact.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>How it works</h2>
+          <p>A voice is not a separately trained model. It is a small, portable, versioned profile: measured style features, representative examples, and a description of how you write. Any locally served instruction model applies it under strict fidelity rules.</p>
+        </div>
+        <div class="pipeline">
+          <div class="lane">
+            <p class="lane-title">Train</p>
+            <ol class="steps">
+              <li>Your documents</li><li>Extract &amp; clean</li><li>Measure style</li><li>Profile + examples</li><li>Voice package</li>
+            </ol>
+          </div>
+          <div class="lane">
+            <p class="lane-title">Run</p>
+            <ol class="steps">
+              <li>stdin</li><li>Segment</li><li>Protect facts</li><li>Local model</li><li>Verify</li><li>stdout</li>
+            </ol>
+          </div>
+        </div>
+        <div class="grid-2" style="margin-top:1.25rem">
+          <div class="card">
+            <h3>Meaning first</h3>
+            <p>Numbers, names, dates, URLs, citations and quotations are extracted before the rewrite and checked after it. Code blocks, tables and front matter never reach the model at all. A failed check is retried with feedback; under <code>--strict</code> it is an error, never a silent change.</p>
+          </div>
+          <div class="card">
+            <h3>Bring your own model</h3>
+            <p>Proselign talks to any OpenAI-compatible endpoint you run locally: llama.cpp, vLLM, Ollama or LM Studio. The voice is data, independent of any model vendor, so you can change models without retraining.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="principles">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Principles</h2>
+          <p>Proselign does one thing and tries to do it well.</p>
+        </div>
+        <div class="grid-3">
+          <div class="card"><h3>Unix-first</h3><p>stdin to stdout, diagnostics to stderr, meaningful exit codes. It composes with <code>find</code>, <code>xargs</code>, <code>make</code> and your editor.</p></div>
+          <div class="card"><h3>Local-first</h3><p>No telemetry and no network calls by default. Your corpus, voices and drafts never leave your machine; <code>--offline</code> enforces it.</p></div>
+          <div class="card"><h3>Voice as data</h3><p>A voice is a versioned, inspectable JSON profile you can export, share, audit and delete, not an opaque set of weights.</p></div>
+          <div class="card"><h3>Transparent</h3><p>Every measurement is reproducible, every check is reported, and the profile separates what was counted from what was inferred.</p></div>
+          <div class="card"><h3>Consent matters</h3><p>You decide what is ingested and what is exported. Exports omit corpus paths by default; examples are opt-in.</p></div>
+          <div class="card"><h3>Permissive</h3><p>BSD 3-Clause. No dependencies beyond the Python standard library in the core tool.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="roadmap">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Roadmap</h2>
+          <p>Proselign is early. Each milestone ships when its exit criterion is met, not before.</p>
+        </div>
+        <ol class="milestones">
+          <li class="now"><span class="tag">M0</span><div><strong>Repository skeleton &amp; CLI contract</strong><span>Installable command, stdin/stdout golden tests, CI, packaging. <em>In progress.</em></span></div></li>
+          <li><span class="tag">M1</span><div><strong>Profile MVP</strong><span>Local model backend, JSON voice profile, Markdown-safe rewriting with demonstrated preservation.</span></div></li>
+          <li><span class="tag">M2</span><div><strong>Automatic ingestion</strong><span>Directory scan, style extraction, voice registry: a new voice can be learned and reused.</span></div></li>
+          <li><span class="tag">M3</span><div><strong>Retrieval &amp; portability</strong><span>Embeddings, genre-matched examples, import/export, measured gain over profile-only.</span></div></li>
+          <li><span class="tag">M4</span><div><strong>Rigorous fidelity</strong><span>Strict semantic checks, regression suite, held-out evaluation, published benchmarks.</span></div></li>
+          <li><span class="tag">M5</span><div><strong>Extensions</strong><span>DOCX/PDF ingestion, optional LoRA adapters, editor integrations, if user testing justifies them.</span></div></li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="get">
+      <div class="wrap">
+        <div class="section-head">
+          <h2>Get it</h2>
+          <p>Ubuntu 22.04, 24.04 and 26.04 LTS on amd64 and arm64, plus a CPU-only tier for IBM POWER (ppc64el) and Z (s390x). Or anywhere with Python 3.10+.</p>
+        </div>
+<pre class="code"><code>sudo add-apt-repository ppa:bceverly/proselign
+sudo apt update &amp;&amp; sudo apt install proselign</code></pre>
+        <p><a href="docs/#install">Other install options</a> &middot; <a href="https://github.com/bceverly/proselign">Source on GitHub</a> &middot; <a href="https://github.com/bceverly/proselign/releases">Releases</a></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span>&copy; 2026 Bryan C. Everly &middot; <a href="https://github.com/bceverly/proselign/blob/main/LICENSE">BSD 3-Clause</a></span>
+      <span><a href="docs/">Docs</a> &middot; <a href="docs/#security">Security &amp; privacy</a> &middot; <a href="https://github.com/bceverly/proselign/issues">Issues</a></span>
+    </div>
+  </footer>
+</body>
+</html>

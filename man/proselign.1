@@ -1,0 +1,158 @@
+.\" SPDX-License-Identifier: BSD-3-Clause
+.\" Copyright (c) 2026 Bryan C. Everly
+.TH PROSELIGN 1 "October 2026" "proselign" "User Commands"
+.SH NAME
+proselign \- learn a writer's prose style and align text to it, locally
+.SH SYNOPSIS
+.B proselign
+.B \-\-voice
+.I NAME
+.RI [ options ]
+.RI [ FILE ...]
+.br
+.B proselign train \-\-voice
+.I NAME
+.RB [ \-\-append ]
+.IR PATH ...
+.br
+.B proselign voices
+.br
+.B proselign inspect
+.I NAME
+.br
+.B proselign export
+.I NAME
+.RB [ \-o
+.IR FILE ]
+.RB [ \-\-include\-sources ]
+.br
+.B proselign import
+.I FILE
+.RB [ \-\-force ]
+.br
+.B proselign delete
+.I NAME
+.SH DESCRIPTION
+.B proselign
+is a filter. It reads text from standard input (or the named files), rewrites
+it in the style of a previously learned
+.IR voice ,
+and writes the result to standard output. Standard output carries the
+rewritten text and nothing else; all diagnostics go to standard error.
+.PP
+Facts, numbers, names, URLs, citations, quotations, code and Markdown
+structure are preserved. Fenced code blocks, tables, HTML blocks and front
+matter are copied verbatim and never sent to the model. Each rewritten chunk
+is checked to confirm protected tokens survived; failures are retried with
+feedback, and if they still fail the original text is kept (or, with
+.BR \-\-strict ,
+the command fails).
+.SH COMMANDS
+.TP
+.B train
+Measure the
+.B .txt
+and
+.B .md
+documents under each
+.I PATH
+and store the resulting voice. Hidden files and directories are skipped.
+.B \-\-append
+re-learns an existing voice from its previous sources plus the new ones.
+.TP
+.B voices
+List stored voices, one per line: identifier, display name, document count,
+separated by tabs.
+.TP
+.B inspect
+Print a voice's profile as JSON.
+.TP
+.B export
+Write a voice to a portable
+.B .proselign
+archive. Corpus file paths and hashes are omitted unless
+.B \-\-include\-sources
+is given.
+.TP
+.B import
+Install a voice from an archive. Archives are validated; nothing in them is
+executed.
+.TP
+.B delete
+Permanently remove a voice.
+.SH OPTIONS
+.TP
+.BI \-\-strength " N"
+Degree of stylistic change from 0.0 (minimal) to 1.0 (full). Default 0.5.
+.TP
+.B \-\-format markdown\fR|\fBtext
+How to segment input. Default markdown.
+.TP
+.B \-\-strict
+Exit with status 4 instead of keeping original text when a chunk fails
+fidelity checks.
+.TP
+.BI \-\-backend " openai-compat" \fR|\fB mock
+Inference backend.
+.B mock
+echoes its input and is useful for testing pipelines.
+.TP
+.BI \-\-endpoint " URL"
+Base URL of an OpenAI-compatible server. Default http://127.0.0.1:8080/v1.
+.TP
+.BI \-\-model " NAME"
+Model name to request.
+.TP
+.B \-\-offline
+Refuse any endpoint that is not a loopback address.
+.TP
+.BI \-\-seed " N"
+Sampling seed, for reproducible runs.
+.TP
+.BI \-\-max\-chunk\-tokens " N"
+Upper bound on the size of each rewritten chunk. Default 1500.
+.TP
+.B \-\-json\-diagnostics
+Write a JSON run report to standard error.
+.SH ENVIRONMENT
+.TP
+.B PROSELIGN_BACKEND\fR, \fBPROSELIGN_ENDPOINT\fR, \fBPROSELIGN_MODEL
+Defaults for the matching options.
+.TP
+.B PROSELIGN_HOME
+Overrides the data directory.
+.TP
+.B XDG_DATA_HOME
+Voices are stored in
+.IR $XDG_DATA_HOME/proselign/voices ,
+default
+.IR ~/.local/share/proselign/voices .
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Unexpected error.
+.TP
+.B 2
+Usage error: bad arguments or unreadable input.
+.TP
+.B 3
+Voice error: unknown, invalid or conflicting voice.
+.TP
+.B 4
+Validation error: a rewrite failed fidelity checks under
+.BR \-\-strict .
+.TP
+.B 5
+Backend error: the inference endpoint is unreachable or replied badly.
+.SH EXAMPLES
+.nf
+proselign train \-\-voice Bryan ~/Documents/Writing/
+cat draft.md | proselign \-\-voice Bryan > final.md
+proselign \-\-voice Bryan \-\-strict \-\-strength 0.3 < memo.txt
+llama\-server \-m model.gguf \-\-port 8080 &
+.fi
+.SH SEE ALSO
+https://proselign.org

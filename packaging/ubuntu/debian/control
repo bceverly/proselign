@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+Source: proselign
+Section: text
+Priority: optional
+Maintainer: Bryan C. Everly <bceverly@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               dh-python,
+               python3-all (>= 3.10),
+               python3-pytest <!nocheck>
+Standards-Version: 4.6.0
+Rules-Requires-Root: no
+Homepage: https://proselign.org
+Vcs-Browser: https://github.com/bceverly/proselign
+X-Python3-Version: >= 3.10
+
+Package: proselign
+# Pure Python, but restricted to the architectures the local LLM stack it
+# drives supports.  amd64 and arm64: full support (GPU builds of llama.cpp
+# and vLLM, Ollama).  ppc64el and s390x: CPU-only tier (llama.cpp and the vLLM
+# CPU backend; no Ollama, no GPU; s390x needs big-endian GGUF models).
+Architecture: amd64 arm64 ppc64el s390x
+Depends: ${misc:Depends}, ${python3:Depends}, python3 (>= 3.10)
+Suggests: llama.cpp | ollama
+Description: learn a writer's prose style and align text to it, locally
+ Proselign is a Unix filter that learns an individual author's
+ characteristic prose style from a corpus of their documents and rewrites
+ new text in that style, while preserving facts, figures, names, URLs,
+ citations, quotations and Markdown structure.
+ .
+   cat draft.md | proselign --voice Bryan > final.md
+ .
+ It is local-first: voices are stored under $XDG_DATA_HOME, inference runs
+ against a locally served model through any OpenAI-compatible endpoint
+ (llama.cpp, vLLM, Ollama), and nothing leaves the machine by default.
+ The program itself has no dependencies beyond the Python standard library.

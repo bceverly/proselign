@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+# Input to `make lock`; the hash-locked .txt beside it is what gets installed.
+#
+# Safety, installed into its OWN venv (.venv-safety) by `make security-deps`:
+# it pins filelock<4.0, which would otherwise hold the development venv on a
+# filelock with known vulnerabilities.
+safety

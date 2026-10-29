@@ -1,0 +1,31 @@
+#!/usr/bin/make -f
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+#
+# proselign is pure Python with no third-party dependencies, so the package
+# installs the module straight into the system dist-packages and lets
+# dh_python3 handle byte-compilation and the python3 dependency.  This works
+# unchanged on every Ubuntu LTS from 22.04 (Python 3.10) onward, without
+# depending on each series' setuptools/pyproject support.
+
+DESTDIR := debian/proselign
+SITE := $(DESTDIR)/usr/lib/python3/dist-packages
+
+%:
+	dh $@ --with python3
+
+override_dh_auto_configure override_dh_auto_build:
+	@true
+
+override_dh_auto_install:
+	install -d $(SITE)
+	cp -r src/proselign $(SITE)/
+	find $(SITE) -name '__pycache__' -prune -exec rm -rf {} +
+	rm -f $(SITE)/proselign/RELEASE_DIGEST
+	install -D -m 0755 packaging/ubuntu/proselign.launcher $(DESTDIR)/usr/bin/proselign
+
+override_dh_auto_test:
+ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	PYTHONPATH=src HOME=$(CURDIR)/debian/test-home python3 -m pytest -q -p no:cacheprovider tests
+	rm -rf debian/test-home
+endif

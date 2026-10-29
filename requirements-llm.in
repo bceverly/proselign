@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+# Input to `make lock`; the hash-locked .txt beside it is what gets installed.
+# Local LLM tooling from the design document, installed into the dev venv by
+# `make install-dev` (skip with SKIP_LLM=1).  None of this is a runtime
+# dependency of proselign itself, which only needs *some* OpenAI-compatible
+# endpoint; these make one available on a development machine.
+#
+# llama.cpp via its Python binding: GGUF models plus an OpenAI-compatible
+# server (`make llm-serve`).  Built from source; `make install-llm` enables
+# CUDA automatically when nvcc is present.
+llama-cpp-python[server]
+# Model download (`make llm-model`) from the Hugging Face hub: `hf download`.
+huggingface_hub[cli]
+# Vector search inside SQLite, for the retrieval milestone (M3).
+sqlite-vec

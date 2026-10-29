@@ -1,0 +1,76 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proselign"
+dynamic = ["version"]
+description = "Learn a writer's prose style and align text to it, locally. A Unix filter."
+readme = "README.md"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "Bryan C. Everly", email = "bceverly@gmail.com" }]
+requires-python = ">=3.10"
+# The core is deliberately standard-library only: it installs anywhere,
+# packages cleanly for every Ubuntu LTS, and has no dependency attack surface.
+dependencies = []
+keywords = ["writing", "style", "prose", "llm", "local-first", "cli", "unix"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: POSIX",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Text Processing :: Linguistic",
+]
+
+[project.urls]
+Homepage = "https://proselign.org"
+Source = "https://github.com/bceverly/proselign"
+Issues = "https://github.com/bceverly/proselign/issues"
+
+[project.scripts]
+proselign = "proselign.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "proselign.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+markers = [
+    "lucky13: MITRE 'Lucky 13' unforgivable-vulnerability checks (Christey 2007)",
+]
+
+[tool.coverage.run]
+source = ["proselign"]
+branch = true
+
+[tool.coverage.report]
+# Project floor: line coverage may never drop below 80%. Ratchet it upward
+# when the real number rises; never lower it.
+fail_under = 80
+show_missing = true
+skip_covered = false
+
+[tool.bandit]
+exclude_dirs = ["tests"]

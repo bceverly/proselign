@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Proselign documentation</title>
+  <meta name="description" content="Install Proselign, learn a voice, rewrite text, and understand the CLI contract, voice format, and security model.">
+  <link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/style.css">
+  <script src="../assets/site.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="../"><img src="../assets/logo.svg" alt="" width="26" height="26"> proselign</a>
+      <nav class="nav" aria-label="Main">
+        <a href="../#how">How it works</a>
+        <a href="../#roadmap">Roadmap</a>
+        <a href="./" aria-current="page">Docs</a>
+        <a href="https://github.com/bceverly/proselign">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="wrap docs">
+    <nav class="toc" aria-label="On this page">
+      <ul>
+        <li><a href="#install">Install</a></li>
+        <li><a href="#model">Run a local model</a></li>
+        <li><a href="#quickstart">Quick start</a></li>
+        <li><a href="#cli">Command reference</a></li>
+        <li><a href="#exit">Exit status</a></li>
+        <li><a href="#fidelity">Fidelity checks</a></li>
+        <li><a href="#voices">Voice format</a></li>
+        <li><a href="#config">Configuration</a></li>
+        <li><a href="#security">Security &amp; privacy</a></li>
+      </ul>
+    </nav>
+
+    <main class="prose">
+      <h1>Documentation</h1>
+      <div class="callout"><p>Proselign is at milestone M0: the command-line contract, voice storage and fidelity checks are in place; style transfer quality depends on the local model you connect. Expect changes before 1.0.</p></div>
+
+      <h2 id="install">Install</h2>
+      <h3>Ubuntu (PPA)</h3>
+      <p>Ubuntu 22.04, 24.04 and 26.04 LTS. Packages are built for the architectures the local model tooling supports:</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Architecture</th><th>Tier</th><th>Local inference</th></tr></thead>
+          <tbody>
+            <tr><td><code>amd64</code>, <code>arm64</code></td><td>Full</td><td>llama.cpp (CPU or GPU), Ollama, vLLM</td></tr>
+            <tr><td><code>ppc64el</code>, <code>s390x</code></td><td>CPU-only</td><td>llama.cpp or the vLLM CPU backend. No Ollama and no GPU acceleration. Expect a quantized 7&ndash;9B model to be usable but slow on many-core POWER and Z systems.</td></tr>
+          </tbody>
+        </table>
+      </div>
+<pre class="code"><code>sudo add-apt-repository ppa:bceverly/proselign
+sudo apt update
+sudo apt install proselign</code></pre>
+      <h3>Debian package</h3>
+      <p>Download the <code>.deb</code> for your architecture from the <a href="https://github.com/bceverly/proselign/releases">releases page</a>, check it against <code>SHA256SUMS</code>, then:</p>
+<pre class="code"><code>sudo apt install ./proselign_*_amd64.deb</code></pre>
+      <h3>pip</h3>
+      <p>Any system with Python 3.10 or newer. Proselign has no third-party runtime dependencies.</p>
+<pre class="code"><code>pip install proselign-*-py3-none-any.whl</code></pre>
+      <h3>From source</h3>
+<pre class="code"><code>git clone https://github.com/bceverly/proselign
+cd proselign
+sudo make install          # into /usr/local; PREFIX=~/.local for a user install</code></pre>
+
+      <h2 id="model">Run a local model</h2>
+      <p>Proselign rewrites through any server that speaks the OpenAI-compatible chat API. By default it expects one at <code>http://127.0.0.1:8080/v1</code>.</p>
+      <h3>llama.cpp</h3>
+<pre class="code"><code>llama-server -m Qwen2.5-7B-Instruct-Q4_K_M.gguf --host 127.0.0.1 --port 8080</code></pre>
+      <h3>Ollama</h3>
+<pre class="code"><code>ollama pull qwen2.5:7b-instruct
+export PROSELIGN_ENDPOINT=http://127.0.0.1:11434/v1
+export PROSELIGN_MODEL=qwen2.5:7b-instruct</code></pre>
+      <h3>IBM POWER and Z (CPU-only tier)</h3>
+      <p>Build llama.cpp from source (it includes POWER and Z vector optimizations) and run <code>llama-server</code> as above, or use vLLM's CPU backend. On <strong>s390x</strong>, which is big-endian, use a big-endian GGUF model: convert one with llama.cpp's <code>gguf-py</code> tools or download a published big-endian build.</p>
+      <p>A 4-bit 7&ndash;9B model runs well on a 12&ndash;16&nbsp;GB GPU; larger models are worth evaluating on 24&ndash;32&nbsp;GB cards. Bigger is not automatically better for style fidelity, so test with your own writing. Model weights carry their own licenses, separate from Proselign's.</p>
+
+      <h2 id="quickstart">Quick start</h2>
+<pre class="code"><code># 1. Learn a voice from your own .txt and .md files
+proselign train --voice Bryan ~/Documents/Writing/
+
+# 2. Rewrite: stdout carries the result and nothing else
+cat draft.md | proselign --voice Bryan &gt; final.md
+
+# 3. Be conservative with a sensitive document
+proselign --voice Bryan --strict --strength 0.3 &lt; contract-summary.md</code></pre>
+      <p>Try the pipeline without a model: <code>--backend mock</code> echoes text through every stage (segmentation, protection, validation), which is useful in scripts and CI.</p>
+
+      <h2 id="cli">Command reference</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+          <tbody>
+            <tr><td><code>proselign --voice NAME [FILE...]</code></td><td>Rewrite stdin (or files; <code>-</code> is stdin) in a voice. Same as <code>proselign rewrite</code>.</td></tr>
+            <tr><td><code>proselign train --voice NAME PATH...</code></td><td>Learn a voice from <code>.txt</code>/<code>.md</code> files. <code>--append</code> re-learns with additional documents.</td></tr>
+            <tr><td><code>proselign voices</code></td><td>List voices: id, name, document count (tab-separated).</td></tr>
+            <tr><td><code>proselign inspect NAME</code></td><td>Print a voice's profile as JSON.</td></tr>
+            <tr><td><code>proselign export NAME [-o FILE]</code></td><td>Write a portable <code>.proselign</code> archive. Corpus paths are omitted unless <code>--include-sources</code>.</td></tr>
+            <tr><td><code>proselign import FILE [--force]</code></td><td>Install a voice from an archive. Nothing in an archive is ever executed.</td></tr>
+            <tr><td><code>proselign delete NAME</code></td><td>Permanently remove a voice.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Rewrite options</h3>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Option</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>--strength 0.0&ndash;1.0</code></td><td>Degree of stylistic change. Default 0.5.</td></tr>
+            <tr><td><code>--format markdown|text</code></td><td>How input is segmented. Default <code>markdown</code>.</td></tr>
+            <tr><td><code>--strict</code></td><td>Fail (exit 4) instead of keeping the original text when a chunk fails fidelity checks.</td></tr>
+            <tr><td><code>--backend openai-compat|mock</code></td><td>Inference backend.</td></tr>
+            <tr><td><code>--endpoint URL</code>, <code>--model NAME</code></td><td>Where and what to call.</td></tr>
+            <tr><td><code>--offline</code></td><td>Refuse any endpoint that is not loopback.</td></tr>
+            <tr><td><code>--seed N</code></td><td>Sampling seed for reproducible runs (0&ndash;4294967295).</td></tr>
+            <tr><td><code>--max-chunk-tokens N</code></td><td>Upper bound on each rewritten chunk. Default 1500.</td></tr>
+            <tr><td><code>--json-diagnostics</code></td><td>Write a JSON run report to stderr.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="exit">Exit status</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>0</code></td><td>Success.</td></tr>
+            <tr><td><code>1</code></td><td>Unexpected error.</td></tr>
+            <tr><td><code>2</code></td><td>Usage error: bad arguments or unreadable input.</td></tr>
+            <tr><td><code>3</code></td><td>Voice error: unknown, invalid or conflicting voice.</td></tr>
+            <tr><td><code>4</code></td><td>Validation error: a rewrite failed fidelity checks under <code>--strict</code>.</td></tr>
+            <tr><td><code>5</code></td><td>Backend error: the endpoint is unreachable or replied badly.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="fidelity">Fidelity checks</h2>
+      <p>Before a chunk is rewritten, Proselign records its protected tokens: numbers and currency, percentages, URLs, e-mail addresses, quotations, citations like <code>[3]</code> and inline code. After the rewrite, every token must still be present as many times as before. A failure is retried with the specific problems as feedback; if retries fail, the original text is kept and a warning goes to stderr, or with <code>--strict</code> the run fails with exit status 4.</p>
+      <p>Fenced code blocks, indented code, pipe tables, HTML blocks and YAML front matter are copied byte for byte and never sent to the model.</p>
+
+      <h2 id="voices">Voice format</h2>
+      <p>A voice is a JSON manifest stored in <code>$XDG_DATA_HOME/proselign/voices/&lt;id&gt;/voice.json</code> (by default <code>~/.local/share/proselign/</code>), readable only by you. It keeps objective measurements (<code>metrics</code>) apart from interpretive hints (<code>style</code>):</p>
+<pre class="code"><code>{
+  "schema_version": 1,
+  "voice_id": "bryan",
+  "display_name": "Bryan",
+  "style": { "tone": ["conversational"], "sentence_length": "short", "paragraphing": "compact" },
+  "metrics": { "sentence_length_words": { "mean": 13.4, "median": 12.0, "stdev": 6.1 }, "...": "..." },
+  "corpus_summary": { "documents": 214, "words": 186402 },
+  "license_and_consent": { "raw_examples_exportable": false }
+}</code></pre>
+      <p>Exported <code>.proselign</code> archives are gzip'd tar files containing only that manifest. Import accepts nothing else: no other members, no links, no oversized files, no executable formats.</p>
+
+      <h2 id="config">Configuration</h2>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>Variable</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>PROSELIGN_BACKEND</code></td><td>Default for <code>--backend</code>.</td></tr>
+            <tr><td><code>PROSELIGN_ENDPOINT</code></td><td>Default for <code>--endpoint</code>.</td></tr>
+            <tr><td><code>PROSELIGN_MODEL</code></td><td>Default for <code>--model</code>.</td></tr>
+            <tr><td><code>PROSELIGN_HOME</code></td><td>Override the data directory entirely.</td></tr>
+            <tr><td><code>XDG_DATA_HOME</code></td><td>Base of the default data directory.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="security">Security &amp; privacy</h2>
+      <ul>
+        <li><strong>No telemetry, no network by default.</strong> The only connection Proselign makes is to the endpoint you configure; <code>--offline</code> restricts that to loopback.</li>
+        <li><strong>Documents are data, never instructions.</strong> Ingested text and text being rewritten are delimited with per-request random markers, so embedded "instructions" cannot escape into the prompt.</li>
+        <li><strong>Private storage.</strong> The voice store is created 0700 and manifests 0600 regardless of your umask; writes never follow symbolic links.</li>
+        <li><strong>Symlinks are not followed</strong> when walking a corpus directory.</li>
+        <li><strong>Exports disclose little.</strong> Corpus paths and hashes are stripped unless you ask for them.</li>
+        <li><strong>Tested against MITRE's "Lucky 13"</strong> unforgivable vulnerability classes on every change, alongside Bandit, Semgrep, CodeQL, dependency audits and secret scanning.</li>
+        <li><strong>Attribution.</strong> Rewriting text in someone else's voice without their consent is impersonation. Use voices you own or are authorized to use, and disclose assisted writing where it matters.</li>
+      </ul>
+      <p>Report vulnerabilities privately as described in <a href="https://github.com/bceverly/proselign/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+    </main>
+  </div>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <span>&copy; 2026 Bryan C. Everly &middot; <a href="https://github.com/bceverly/proselign/blob/main/LICENSE">BSD 3-Clause</a></span>
+      <span><a href="../">Home</a> &middot; <a href="https://github.com/bceverly/proselign/issues">Issues</a></span>
+    </div>
+  </footer>
+</body>
+</html>

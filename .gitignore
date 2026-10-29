@@ -218,3 +218,15 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- proselign ---
+# Isolated tool venvs (make security)
+.venv-semgrep/
+.venv-safety/
+# SonarQube scanner work directory
+.scannerwork/
+# Build stamp written by `make install` (never committed)
+src/proselign/_build.py
+# Exported voice archives and local model weights
+*.proselign
+*.gguf
