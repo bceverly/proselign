@@ -39,6 +39,15 @@ parts, `MAJOR.MINOR.PATCH.BUILD`, as in the SysManage projects.
   choices); stray singular pronouns are sent back for another attempt.
 - Markdown rewrites keep headings exactly as written, and training on `.md`
   files measures only the prose, not the markup.
+- Rewrites that drift into another language mid-sentence (a known habit of
+  some local models) are caught: the stray fragment is translated back on the
+  fly, or the chunk is retried, and never written out.
+- A comma or full stop that the model moves across a closing quote mark is
+  put back, so faithful quotations are no longer rejected for it.
+- A Word document's title or cover page is left completely untouched: a cover
+  page from Word's gallery, or a short first page (under 250 words) ending in
+  a page or section break. `keep_title_page = off` in `~/.proselignrc`
+  rewrites it too.
 - An animated progress line with elapsed time and an estimate of the time
   left, on by default when stderr is a terminal; `--no-progress` or
   `progress = off` in `~/.proselignrc` hides it.

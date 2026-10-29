@@ -180,7 +180,7 @@ def _cmd_rewrite(args: argparse.Namespace, registry: Registry, io: dict) -> int:
         rewriter.progress = progress_mod.Progress(io["stderr"])
     try:
         if any(path.suffix.lower() == ".docx" for path in args.files):
-            return _rewrite_docx(args, rewriter, io)
+            return _rewrite_docx(args, rewriter, io, settings)
         if args.output and any(
             str(f) != "-" and f.resolve() == args.output.resolve() for f in args.files
         ):
@@ -202,7 +202,9 @@ def _cmd_rewrite(args: argparse.Namespace, registry: Registry, io: dict) -> int:
     return EXIT_OK
 
 
-def _rewrite_docx(args: argparse.Namespace, rewriter: Rewriter, io: dict) -> int:
+def _rewrite_docx(
+    args: argparse.Namespace, rewriter: Rewriter, io: dict, settings: config_mod.Config
+) -> int:
     """Rewrite one Word document into ``--output``, keeping its formatting."""
     if len(args.files) != 1:
         raise UsageError("rewrite one .docx file at a time")
@@ -217,7 +219,7 @@ def _rewrite_docx(args: argparse.Namespace, rewriter: Rewriter, io: dict) -> int
         data = source.read_bytes()
     except OSError as exc:
         raise UsageError(f"cannot read {source}: {exc.strerror}") from exc
-    result, report = rewrite_docx(data, rewriter.rewrite_units)
+    result, report = rewrite_docx(data, rewriter.rewrite_units, settings.keep_title_page)
     rewriter.progress.close()
     write_private_file(args.output, result)
     kept = ", ".join(f"{count} {why}" for why, count in sorted(report.kept.items()))

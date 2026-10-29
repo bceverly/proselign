@@ -136,7 +136,10 @@ matter copied unchanged. Required when the input is a
 file: its prose is rewritten while styles, headers, footers, tables,
 images and character formatting are kept. Headings, captions, links,
 fields, tracked changes and paragraphs that are not full sentences are
-left as they are. The input file is never overwritten.
+left as they are, and so is a title or cover page (a short first page ending in a
+page or section break), unless
+.B keep_title_page
+is off in the settings file. The input file is never overwritten.
 .TP
 .BI \-\-config " FILE"
 Read settings from
@@ -177,9 +180,10 @@ sets
 .BR voice ,
 .BR strength ,
 .BR format ,
-.B strict
+.BR strict ,
+.B progress
 and
-.BR progress ;
+.BR keep_title_page ;
 .B [backend]
 sets
 .BR backend ,

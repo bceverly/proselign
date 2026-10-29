@@ -23,6 +23,8 @@ strict = off
 # Animated progress line with an estimate of the time left (only shown on
 # an interactive terminal; --no-progress turns it off for one run).
 progress = on
+# Leave a Word document's title or cover page completely untouched.
+keep_title_page = on
 
 [backend]
 # openai-compat (llama.cpp, Ollama, vLLM, ...) or mock.

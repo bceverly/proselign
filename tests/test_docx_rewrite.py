@@ -329,3 +329,71 @@ def test_typed_list_markers_are_kept_and_the_item_rewritten():
         in xml
     )
     assert "THEN THE REST OF THE SENTENCE." in xml and SENTENCE.upper() in xml
+
+
+# --- title pages ------------------------------------------------------------
+
+TITLE = _p(_r("Report on the Production of Documents."))
+NOTICE = _p(_r("This memorandum is attorney work product, prepared for litigation."))
+BODY = _p(_r(SENTENCE))
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        _p('<w:r><w:br w:type="page"/></w:r>'),
+        _p("<w:r><w:lastRenderedPageBreak/><w:t>x</w:t></w:r>"),
+        "<w:p><w:pPr><w:pageBreakBefore/></w:pPr>" + _r(SENTENCE) + "</w:p>",
+        "<w:p><w:pPr><w:sectPr><w:titlePg/></w:sectPr></w:pPr></w:p>",
+    ],
+)
+def test_short_first_page_is_left_alone(boundary):
+    result, report = rewrite_docx(_docx(TITLE + NOTICE + boundary + BODY), _upper)
+    text = docx_text(result)
+    assert "Report on the Production of Documents." in text
+    assert "attorney work product" in text
+    assert SENTENCE.upper() in text
+    assert report.kept["title page"] == 2
+
+
+def test_long_first_page_or_no_break_is_body_text():
+    long_page = _p(_r("Many words here. " * 130)) + _p('<w:r><w:br w:type="page"/></w:r>')
+    _, report = rewrite_docx(_docx(TITLE + long_page + BODY), _upper)
+    assert "title page" not in report.kept
+    _, report = rewrite_docx(_docx(TITLE + NOTICE + BODY), _upper)
+    assert "title page" not in report.kept
+    empty_first = _p('<w:r><w:br w:type="page"/></w:r>') + TITLE
+    _, report = rewrite_docx(_docx(empty_first), _upper)
+    assert "title page" not in report.kept
+    off = '<w:p><w:pPr><w:pageBreakBefore w:val="0"/></w:pPr>' + _r(SENTENCE) + "</w:p>"
+    _, report = rewrite_docx(_docx(TITLE + off), _upper)
+    assert "title page" not in report.kept
+
+
+def test_cover_page_from_the_gallery_is_left_alone_anywhere():
+    cover = (
+        '<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Cover Pages"/>'
+        f"</w:docPartObj></w:sdtPr><w:sdtContent>{NOTICE}</w:sdtContent></w:sdt>"
+    )
+    long_intro = _p(_r("Many words here. " * 130))
+    _, report = rewrite_docx(_docx(long_intro + cover + BODY), _upper)
+    assert report.kept["title page"] == 1
+
+
+def test_title_page_can_be_rewritten_when_asked():
+    source = _docx(TITLE + NOTICE + _p('<w:r><w:br w:type="page"/></w:r>') + BODY)
+    result, report = rewrite_docx(source, _upper, keep_title_page=False)
+    assert "ATTORNEY WORK PRODUCT" in docx_text(result)
+    assert "title page" not in report.kept
+
+
+def test_cli_keep_title_page_setting(trained, tmp_path: Path, monkeypatch):
+    source = tmp_path / "in.docx"
+    source.write_bytes(_docx(TITLE + NOTICE + _p('<w:r><w:br w:type="page"/></w:r>') + BODY))
+    rc = tmp_path / "rc"
+    rc.write_text("[rewrite]\nkeep_title_page = off\n", "utf-8")
+    rc.chmod(0o600)
+    argv = ["--voice", "Bryan", "--backend", "mock", str(source), "-o", str(tmp_path / "o.docx")]
+    assert "title page" in run(argv, registry=trained)[2]
+    monkeypatch.setenv("PROSELIGN_CONFIG", str(rc))
+    assert "title page" not in run(argv, registry=trained)[2]

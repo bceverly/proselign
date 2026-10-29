@@ -26,6 +26,7 @@ MAX_CONFIG_BYTES = 64 * 1024
 _STRINGS = {("rewrite", "voice"), ("backend", "backend"), ("backend", "endpoint")}
 _STRINGS |= {("backend", "model"), ("rewrite", "format")}
 _BOOLEANS = {("rewrite", "strict"), ("rewrite", "progress"), ("backend", "offline")}
+_BOOLEANS |= {("rewrite", "keep_title_page")}
 # [style] key -> StyleRules field
 _STYLE_KEYS = {
     "passive_voice": "passive_voice",
@@ -47,6 +48,7 @@ class Config:  # pylint: disable=too-many-instance-attributes  # one per setting
     text_format: str | None = None
     strict: bool = False
     progress: bool = True
+    keep_title_page: bool = True
     backend: str | None = None
     endpoint: str | None = None
     model: str | None = None

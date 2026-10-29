@@ -17,7 +17,7 @@ from proselign.errors import UsageError, ValidationError
 from proselign.inference.base import Backend
 from proselign.progress import NoProgress
 from proselign.rewrite import protect, style
-from proselign.rewrite.prompt import build_messages
+from proselign.rewrite.prompt import build_language_fix, build_messages
 from proselign.rewrite.style import StyleRules
 from proselign.voice.profile import Voice
 
@@ -64,6 +64,7 @@ class Report:
     chunks: int = 0
     repaired: int = 0
     fallbacks: int = 0
+    language_fixes: int = 0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -186,8 +187,12 @@ class Rewriter:
         for attempt in range(self.options.max_repairs + 1):
             messages = build_messages(self.voice, core, self.options.strength, feedback, rules)
             reply = self.backend.rewrite(messages, self._temperature()).strip()
-            candidate = style.clean(core, reply, rules)
+            candidate = protect.repair_quotations(core, style.clean(core, reply, rules))
             problems = protect.missing(core, candidate)
+            drift = protect.foreign_script(core, candidate)
+            if drift and not problems:
+                candidate, drift = self._fix_language(core, candidate)
+            problems += drift
             if not candidate:
                 problems = ["the rewrite was empty"]
             if not problems:
@@ -205,6 +210,17 @@ class Rewriter:
                 self.report.warnings.append(f"style rules not fully met: {_summarize(remaining)}")
             return best, []
         return None, feedback or []
+
+    def _fix_language(self, core: str, candidate: str) -> tuple[str, list[str]]:
+        """Translate the stray fragments of a rewrite that drifted into another
+        language, keeping the rest of it; returns the text and any drift left."""
+        reply = self.backend.rewrite(build_language_fix(candidate), 0.0).strip()
+        fixed = protect.repair_quotations(core, style.clean(core, reply, self.options.rules))
+        drift = protect.foreign_script(core, fixed)
+        if fixed and not drift and not protect.missing(core, fixed):
+            self.report.language_fixes += 1
+            return fixed, []
+        return candidate, protect.foreign_script(core, candidate)
 
     def _chunks(self, segments: list[Segment]) -> list[Segment]:
         """Merge adjacent prose (and the blank lines between) up to the token budget."""

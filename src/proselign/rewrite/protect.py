@@ -11,6 +11,7 @@ figure, URL, citation or quotation is a changed meaning, not a style change.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter
 
 _PATTERNS = {
@@ -65,3 +66,55 @@ def protected_spans(text: str) -> list[tuple[int, int]]:
         else:
             merged.append((start, end))
     return merged
+
+
+_TRAILING = ".,;:!?"
+
+
+def repair_quotations(source: str, rewrite: str) -> str:
+    """Undo the one change models make to quotations on their own: moving a
+    trailing comma or full stop across the closing quote mark (American
+    style), in either direction.  The quoted words must otherwise be
+    identical; anything else is left for :func:`missing` to report."""
+    for token in dict.fromkeys(m.group(0) for m in _PATTERNS["quotation"].finditer(source)):
+        if token in rewrite:
+            continue
+        opener, inner, closer = token[0], token[1:-1], token[-1]
+        for mark in _TRAILING:
+            moved_in = f"{opener}{inner}{mark}{closer}"
+            if moved_in in rewrite:  # "Policy" -> "Policy."
+                rewrite = rewrite.replace(moved_in, f"{token}{mark}")
+                break
+            if inner.endswith(mark):  # "Plus," -> "Plus", (or the comma dropped)
+                moved_out = f"{opener}{inner[:-1]}{closer}"
+                rewrite = rewrite.replace(moved_out + mark, token)
+                rewrite = re.sub(re.escape(moved_out) + r"(?![.,;:!?])", token, rewrite)
+    return rewrite
+
+
+def _script(char: str) -> str | None:
+    """The writing system of a letter outside basic and extended Latin."""
+    code = ord(char)
+    if 0x3000 <= code <= 0x303F or 0xFF00 <= code <= 0xFFEF:
+        return "CJK"  # ideographic punctuation and full-width forms
+    if code <= 0x24F or not char.isalpha():
+        return None
+    name = unicodedata.name(char, "")
+    script = name.split(" ", 1)[0] if name else "UNKNOWN"
+    return "CJK" if script in ("CJK", "HIRAGANA", "KATAKANA", "HANGUL") else script
+
+
+def foreign_script(source: str, rewrite: str) -> list[str]:
+    """Text in a writing system the source never uses (a model drifting into
+    Chinese mid-sentence, say), reported with a sample."""
+    allowed = {_script(c) for c in source}
+    found: dict[str, list[str]] = {}
+    for char in rewrite:
+        script = _script(char)
+        if script is not None and script not in allowed:
+            found.setdefault(script, []).append(char)
+    return [
+        f"the rewrite switched to {script.title()} text ({''.join(chars[:12])}); "
+        "write only in the language of the original"
+        for script, chars in found.items()
+    ]

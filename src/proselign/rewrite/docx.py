@@ -32,6 +32,8 @@ from proselign.errors import UsageError
 MAX_PART_BYTES = 64 * 1024 * 1024
 MAX_PACKAGE_BYTES = 512 * 1024 * 1024
 MIN_WORDS = 5
+# Text before the first page break counts as a title page up to this length.
+MAX_TITLE_PAGE_WORDS = 250
 
 _PARTS = re.compile(r"word/(?:document|footnotes|endnotes)\d*\.xml")
 _TOKEN = re.compile(r"<!--.*?-->|<\?.*?\?>|<!\[CDATA\[.*?\]\]>|<![^>]*>|<[^>]+>|[^<]+", re.DOTALL)
@@ -45,6 +47,8 @@ _SENTENCE_END = re.compile(r"[.!?][\"'\u201d\u2019)\]]*\s*\Z")
 _LIST_MARKER = re.compile(
     r"[\u2022\u00b7\u25aa\u25cf\u25e6\u2013*o-]|\(?(?:\d{1,3}|[A-Za-z]|[ivxlcIVXLC]{1,6})[.)]"
 )
+_OFF = re.compile(r'w:val="(?:0|false|off)"')
+_COVER_PAGE = re.compile(r'w:docPartGallery w:val="Cover Pages"')
 _RESERVED = re.compile(r"</?s\d+>|\[\[\d+\]\]")
 _ENTITY = re.compile(r"&(#x[0-9A-Fa-f]{1,6}|#\d{1,7}|lt|gt|amp|quot|apos);")
 _NAMED = {"lt": "<", "gt": ">", "amp": "&", "quot": '"', "apos": "'"}
@@ -72,8 +76,13 @@ class _Paragraph:
     text: str  # with <sN> tags around non-base formatting
 
 
-def rewrite_docx(data: bytes, rewrite_units: RewriteUnits) -> tuple[bytes, DocxReport]:
-    """Return ``data`` with its prose rewritten by ``rewrite_units``."""
+def rewrite_docx(
+    data: bytes, rewrite_units: RewriteUnits, keep_title_page: bool = True
+) -> tuple[bytes, DocxReport]:
+    """Return ``data`` with its prose rewritten by ``rewrite_units``.
+
+    With ``keep_title_page``, a title or cover page is left entirely alone.
+    """
     report = DocxReport()
     try:
         source = zipfile.ZipFile(io.BytesIO(data))
@@ -90,7 +99,8 @@ def rewrite_docx(data: bytes, rewrite_units: RewriteUnits) -> tuple[bytes, DocxR
                 raise UsageError(f"{info.filename} is too large to rewrite")
             body = _read(source, info)
             if _PARTS.fullmatch(info.filename):
-                body = _rewrite_part(body, rewrite_units, report)
+                title = keep_title_page and info.filename == "word/document.xml"
+                body = _rewrite_part(body, rewrite_units, report, title)
             target.writestr(info, body)
     return out.getvalue(), report
 
@@ -106,7 +116,9 @@ def _read(archive: zipfile.ZipFile, info: zipfile.ZipInfo) -> bytes:
     return body
 
 
-def _rewrite_part(body: bytes, rewrite_units: RewriteUnits, report: DocxReport) -> bytes:
+def _rewrite_part(
+    body: bytes, rewrite_units: RewriteUnits, report: DocxReport, keep_title_page: bool = False
+) -> bytes:
     try:
         xml = body.decode("utf-8")
     except UnicodeDecodeError:
@@ -116,12 +128,7 @@ def _rewrite_part(body: bytes, rewrite_units: RewriteUnits, report: DocxReport) 
         raise UsageError("document XML contains a DTD, which Office files never do")
     tokens = _TOKEN.findall(xml)
     ends = _match(tokens)
-    paragraphs = []
-    for i, token in enumerate(tokens):
-        if _name(token) == "w:p" and not token.startswith("</") and ends[i] > i:
-            paragraph = _eligible(tokens, ends, i, report)
-            if paragraph is not None:
-                paragraphs.append(paragraph)
+    paragraphs = _collect(tokens, ends, report, keep_title_page)
     if not paragraphs:
         return body
     rewritten = rewrite_units([p.text for p in paragraphs])
@@ -136,6 +143,78 @@ def _rewrite_part(body: bytes, rewrite_units: RewriteUnits, report: DocxReport) 
         inner = paragraph.keep[: paragraph.run_at] + [runs] + paragraph.keep[paragraph.run_at :]
         tokens[paragraph.start + 1 : paragraph.end] = ["".join(inner)]
     return "".join(tokens).encode("utf-8")
+
+
+def _collect(tokens, ends, report: DocxReport, keep_title_page: bool) -> list[_Paragraph]:
+    """Every paragraph that may be rewritten, in document order."""
+    title = _title_page(tokens, ends) if keep_title_page else set()
+    paragraphs = []
+    for i, token in enumerate(tokens):
+        if _name(token) == "w:p" and not token.startswith("</") and ends[i] > i:
+            if i in title:
+                if _text_of(tokens, i, ends[i]).strip():
+                    _skip(report, "title page")
+                continue
+            paragraph = _eligible(tokens, ends, i, report)
+            if paragraph is not None:
+                paragraphs.append(paragraph)
+    return paragraphs
+
+
+def _text_of(tokens: list[str], start: int, end: int) -> str:
+    return "".join(t for t in tokens[start:end] if not t.startswith("<"))
+
+
+def _title_page(tokens: list[str], ends: list[int]) -> set[int]:
+    """Start indexes of the paragraphs on a title or cover page.
+
+    A cover page inserted from Word's gallery is recognised wherever it is.
+    Otherwise everything before the first page boundary (an explicit page
+    break, "page break before", a section break, or the break Word recorded
+    at its last layout) is a title page when it is short.
+    """
+    starts = [i for i, t in enumerate(tokens) if _name(t) == "w:p" and not t.startswith("</")]
+    covers = [
+        (i, ends[i])
+        for i, t in enumerate(tokens)
+        if _name(t) == "w:sdt"
+        and not t.startswith("</")
+        and _COVER_PAGE.search("".join(tokens[i : ends[i] + 1]))
+    ]
+    pages = {p for p in starts if any(a < p < b for a, b in covers)}
+    boundary = _first_page_end(tokens, ends)
+    if boundary:
+        pages.update(p for p in starts if p < boundary)
+    return pages
+
+
+def _first_page_end(tokens: list[str], ends: list[int]) -> int:
+    """Token index where a short first page ends, or 0 when there is none."""
+    words, paragraph, in_ppr = 0, 0, False
+    for i, token in enumerate(tokens):
+        name = _name(token)
+        if not name:
+            words += len(token.split())
+            if words > MAX_TITLE_PAGE_WORDS:
+                return 0
+            continue
+        closing = token.startswith("</")
+        boundary = None
+        if name == "w:p" and not closing:
+            paragraph = i
+        elif name == "w:pPr" and not token.endswith("/>"):
+            in_ppr = not closing
+        elif name == "w:br" and 'w:type="page"' in token:
+            boundary = i
+        elif name == "w:lastRenderedPageBreak" or (
+            name == "w:pageBreakBefore" and not _OFF.search(token)
+        ):
+            boundary = paragraph  # this paragraph starts the next page
+        elif name == "w:sectPr" and in_ppr and not closing:
+            boundary = ends[paragraph] + 1
+        if boundary is not None:
+            return boundary if words else 0
+    return 0
 
 
 def _name(token: str) -> str:
