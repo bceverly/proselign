@@ -63,7 +63,7 @@ jobs:
           - 'Debian package (s390x, emulated)'
     steps:
       - name: Wait for ${{ matrix.check }}
-        uses: lewagon/wait-on-check-action@74049309dfeff245fe8009a0137eacf28136cb3c # v1.5.0
+        uses: lewagon/wait-on-check-action@369769072fe522a3a8a85c03c96af1e5242a1994 # v1.9.1
         with:
           ref: ${{ github.sha }}
           check-name: ${{ matrix.check }}
