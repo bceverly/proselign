@@ -19,7 +19,8 @@ _PATTERNS = {
     "email": re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b"),
     "quotation": re.compile(r"\"[^\"\n]{1,400}\"|“[^”\n]{1,400}”"),
     "citation": re.compile(r"\[\d+(?:[,–-]\s*\d+)*\]|\[@[\w:-]+\]"),
-    "number": re.compile(r"(?<![\w.])[-+]?\$?\d[\d,]*(?:\.\d+)?%?(?![\w])"),
+    # Thousands separators only between digits: "42, all" is the number 42.
+    "number": re.compile(r"(?<![\w.])[-+]?\$?\d(?:[\d,]*\d)?(?:\.\d+)?%?(?![\w])"),
 }
 
 
@@ -42,3 +43,19 @@ def missing(source: str, rewrite: str) -> list[str]:
         if got < count:
             problems.append(f"{kind} {token!r} appears {count}x in the source but {got}x after")
     return problems
+
+
+# Spans that style fixes must leave byte for byte as they are.
+_VERBATIM_KINDS = ("inline_code", "url", "email", "quotation")
+
+
+def protected_spans(text: str) -> list[tuple[int, int]]:
+    """Sorted, non-overlapping ``(start, end)`` ranges of verbatim tokens."""
+    spans = sorted(m.span() for kind in _VERBATIM_KINDS for m in _PATTERNS[kind].finditer(text))
+    merged: list[tuple[int, int]] = []
+    for start, end in spans:
+        if merged and start < merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    return merged

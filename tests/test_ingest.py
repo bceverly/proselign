@@ -74,7 +74,8 @@ def test_split_sentences():
 def test_build_voice_and_append(corpus: Path, tmp_path: Path):
     voice = build_voice("Bryan", [corpus])
     assert voice.corpus_summary["documents"] == 4
-    assert voice.style and voice.metrics["words"] > 200
+    assert voice.style
+    assert voice.metrics["words"] > 200
     extra = tmp_path / "extra.md"
     extra.write_text("A brand new note with different words entirely. " * 10, "utf-8")
     grown = build_voice("Bryan", [extra], base=voice)
@@ -89,3 +90,59 @@ def test_build_voice_rejects_thin_corpus(tmp_path: Path):
     empty.mkdir()
     with pytest.raises(UsageError, match="no readable"):
         build_voice("x", [empty])
+
+
+def test_load_documents_reads_word_and_pdf_and_reports_skips(tmp_path: Path, monkeypatch):
+    from .conftest import SAMPLE_PARAGRAPHS  # pylint: disable=import-outside-toplevel
+    from .docbuilders import (  # pylint: disable=import-outside-toplevel
+        make_cfb,
+        make_docx,
+        make_pdf,
+        make_word97,
+        para,
+        text_page,
+    )
+
+    (tmp_path / "a.docx").write_bytes(make_docx("".join(para(p) for p in SAMPLE_PARAGRAPHS)))
+    (tmp_path / "b.doc").write_bytes(make_cfb(make_word97([("\r".join(SAMPLE_PARAGRAPHS), True)])))
+    (tmp_path / "c.pdf").write_bytes(make_pdf([text_page(b"A short PDF.")]))
+    (tmp_path / "broken.pdf").write_bytes(b"%PDF-1.4 nothing here")
+    (tmp_path / "blank.md").write_text("\n\n", "utf-8")
+    skipped: list[tuple[str, str]] = []
+    docs = load_documents([tmp_path], lambda path, why: skipped.append((path.name, why)))
+    assert sorted(d.path.name for d in docs) == ["a.docx", "b.doc", "c.pdf"]
+    assert sorted(skipped) == [
+        ("blank.md", "no text"),
+        ("broken.pdf", "PDF has no document catalog"),
+    ]
+
+    monkeypatch.setattr(corpus_mod, "MAX_FILE_BYTES", 10)
+    skipped.clear()
+    load_documents([tmp_path / "a.docx"], lambda path, why: skipped.append(why))
+    assert skipped == ["larger than 0 MB"]
+
+
+def test_mailbox_messages_count_as_documents(tmp_path: Path, monkeypatch):
+    from .conftest import SAMPLE_PARAGRAPHS  # pylint: disable=import-outside-toplevel
+
+    box = "".join(
+        f"From me@example.com Mon Jan  5 10:00:00 2026\nSubject: {i}\n\n{text}\n"
+        for i, text in enumerate(SAMPLE_PARAGRAPHS)
+    )
+    (tmp_path / "Sent.mbox").write_text(box, "utf-8")
+    (tmp_path / "note.md").write_text("\n\n".join(SAMPLE_PARAGRAPHS), "utf-8")
+    docs = load_documents([tmp_path])
+    assert [(d.path.name, d.parts) for d in docs] == [
+        ("Sent.mbox", len(SAMPLE_PARAGRAPHS)),
+        ("note.md", 1),
+    ]
+    voice = build_voice("Bryan", [tmp_path])
+    assert voice.corpus_summary["documents"] == len(SAMPLE_PARAGRAPHS) + 1
+    assert len(voice.sources) == 2
+
+    monkeypatch.setattr(corpus_mod, "MAX_FILE_BYTES", 10)
+    assert [d.path.name for d in load_documents([tmp_path])] == ["Sent.mbox"]
+    monkeypatch.setattr(corpus_mod, "MAX_MAILBOX_BYTES", 10)
+    skipped: list[str] = []
+    assert not load_documents([tmp_path / "Sent.mbox"], lambda path, why: skipped.append(why))
+    assert skipped == ["larger than 0 MB"]

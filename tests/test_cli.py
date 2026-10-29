@@ -73,7 +73,8 @@ def test_json_diagnostics_on_stderr(trained):
     assert code == EXIT_OK
     assert out == "Hello there.\n"
     report = json.loads(err)
-    assert report["chunks"] == 1 and report["fallbacks"] == 0
+    assert report["chunks"] == 1
+    assert report["fallbacks"] == 0
 
 
 def test_unknown_voice(registry):
@@ -151,11 +152,13 @@ def test_voices_inspect_export_import_delete(trained, tmp_path: Path):
 
     archive = tmp_path / "b.proselign"
     code, out, err = run(["export", "Bryan", "-o", str(archive)], registry=trained)
-    assert code == EXIT_OK and out == ""
+    assert code == EXIT_OK
+    assert out == ""
     assert "corpus paths omitted" in err
 
     code, _, err = run(["import", str(archive)], registry=trained)
-    assert code == EXIT_VOICE and "already exists" in err
+    assert code == EXIT_VOICE
+    assert "already exists" in err
 
     code, _, _ = run(["delete", "Bryan"], registry=trained)
     assert code == EXIT_OK
@@ -195,3 +198,11 @@ def test_python_dash_m_entry_point(tmp_path: Path):
     assert proc.returncode == EXIT_VOICE
     assert proc.stdout == ""
     assert "unknown voice" in proc.stderr
+
+
+def test_train_warns_about_unreadable_documents(corpus: Path, registry):
+    (corpus / "damaged.docx").write_bytes(b"PK\x03\x04 truncated")
+    code, _, err = run(["train", "--voice", "Bryan", str(corpus)], registry=registry)
+    assert code == EXIT_OK
+    assert "warning: skipped" in err
+    assert "damaged.docx: corrupt .docx archive" in err

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -16,21 +17,27 @@ from proselign.voice.profile import Voice
 MIN_WORDS = 200
 
 
-def build_voice(name: str, paths: list[Path], base: Voice | None = None) -> Voice:
+def build_voice(
+    name: str,
+    paths: list[Path],
+    base: Voice | None = None,
+    on_skip: Callable[[Path, str], None] | None = None,
+) -> Voice:
     """Measure every document under ``paths`` and return the resulting voice.
 
     With ``base`` (``train --append``), previously recorded sources whose
     files are still readable are re-measured together with the new ones, so
     the profile always describes the whole corpus, never a running average.
+    ``on_skip`` hears about each file that could not be used.
     """
     sources = list(paths)
     if base is not None:
         sources.extend(
             Path(s["path"]) for s in base.sources if "path" in s and Path(s["path"]).is_file()
         )
-    documents = load_documents(sources)
+    documents = load_documents(sources, on_skip)
     if not documents:
-        raise UsageError("no readable .txt or .md documents found")
+        raise UsageError("no readable documents found (.txt, .md, .docx, .doc, .pdf, .mbox)")
 
     corpus = "\n\n".join(doc.text for doc in documents)
     total_words = len(words(corpus))
@@ -45,7 +52,7 @@ def build_voice(name: str, paths: list[Path], base: Voice | None = None) -> Voic
     voice.metrics = metrics
     voice.style = describe(metrics)
     voice.corpus_summary = {
-        "documents": len(documents),
+        "documents": sum(doc.parts for doc in documents),
         "words": total_words,
         "tokens_estimated": int(total_words * 1.3),
     }

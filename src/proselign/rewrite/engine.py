@@ -15,8 +15,9 @@ from dataclasses import dataclass, field
 
 from proselign.errors import UsageError, ValidationError
 from proselign.inference.base import Backend
-from proselign.rewrite import protect
+from proselign.rewrite import protect, style
 from proselign.rewrite.prompt import build_messages
+from proselign.rewrite.style import StyleRules
 from proselign.voice.profile import Voice
 
 MAX_CHUNK_TOKENS = 1_000_000
@@ -41,6 +42,7 @@ class Options:
     max_chunk_tokens: int = 1500
     max_repairs: int = 2
     text_format: str = "markdown"
+    rules: StyleRules = field(default_factory=StyleRules)
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.strength <= 1.0:
@@ -74,6 +76,24 @@ def _is_verbatim_block(block: str) -> bool:
     return False
 
 
+def _front_matter_lines(lines: list[str]) -> int:
+    """How many leading lines form a YAML front-matter block (0 if none)."""
+    if not lines or lines[0].rstrip("\n") != "---":
+        return 0
+    for j in range(1, len(lines)):
+        if lines[j].rstrip("\n") in ("---", "..."):
+            return j + 1
+    return 0
+
+
+def _fence_end(lines: list[str], start: int, marker: str) -> int:
+    """Index just past the line closing the code fence opened at ``start``."""
+    j = start + 1
+    while j < len(lines) and not lines[j].lstrip().startswith(marker):
+        j += 1
+    return j + 1
+
+
 def segment(text: str, text_format: str = "markdown") -> list[Segment]:
     """Split input into prose and verbatim segments, losslessly.
 
@@ -82,16 +102,9 @@ def segment(text: str, text_format: str = "markdown") -> list[Segment]:
     if text_format == "text":
         return [Segment(text, True)] if text else []
 
-    segments: list[Segment] = []
     lines = text.splitlines(keepends=True)
-    i = 0
-    if lines and lines[0].rstrip("\n") == "---":  # YAML front matter
-        for j in range(1, len(lines)):
-            if lines[j].rstrip("\n") in ("---", "..."):
-                segments.append(Segment("".join(lines[: j + 1]), False))
-                i = j + 1
-                break
-
+    i = _front_matter_lines(lines)
+    segments = [Segment("".join(lines[:i]), False)] if i else []
     block: list[str] = []
 
     def flush() -> None:
@@ -105,18 +118,15 @@ def segment(text: str, text_format: str = "markdown") -> list[Segment]:
         fence = _FENCE_OPEN_RE.match(line)
         if fence:
             flush()
-            marker = fence.group(2)
-            j = i + 1
-            while j < len(lines) and not lines[j].lstrip().startswith(marker):
-                j += 1
-            segments.append(Segment("".join(lines[i : j + 1]), False))
-            i = j + 1
+            end = _fence_end(lines, i, fence.group(2))
+            segments.append(Segment("".join(lines[i:end]), False))
+            i = end
             continue
-        if not line.strip():
+        if line.strip():
+            block.append(line)
+        else:
             flush()
             segments.append(Segment(line, False))
-        else:
-            block.append(line)
         i += 1
     flush()
     return segments
@@ -148,20 +158,31 @@ class Rewriter:
         if not core:
             return source
         self.report.chunks += 1
+        rules = self.options.rules
         feedback: list[str] | None = None
+        best: str | None = None  # faithful, but still breaking a style rule
         for attempt in range(self.options.max_repairs + 1):
-            messages = build_messages(self.voice, core, self.options.strength, feedback)
-            candidate = self.backend.rewrite(messages, self._temperature()).strip()
+            messages = build_messages(self.voice, core, self.options.strength, feedback, rules)
+            reply = self.backend.rewrite(messages, self._temperature()).strip()
+            candidate = style.clean(core, reply, rules)
             problems = protect.missing(core, candidate)
             if not candidate:
                 problems = ["the rewrite was empty"]
             if not problems:
-                if attempt:
-                    self.report.repaired += 1
-                return lead + candidate + trail
+                problems = style.violations(core, candidate, rules)
+                if not problems:
+                    if attempt:
+                        self.report.repaired += 1
+                    return lead + candidate + trail
+                best = style.punctuate(candidate, rules)
             feedback = problems
 
         detail = "; ".join(feedback or [])
+        if best is not None and not protect.missing(core, best):
+            remaining = style.violations(core, best, rules)
+            if remaining:
+                self.report.warnings.append(f"style rules not fully met: {'; '.join(remaining)}")
+            return lead + best + trail
         if self.options.strict:
             raise ValidationError(f"rewrite failed fidelity checks: {detail}")
         self.report.fallbacks += 1

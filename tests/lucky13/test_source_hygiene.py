@@ -14,10 +14,12 @@ WEBSITE = REPO / "website"
 
 
 def test_02_xss_cwe79_no_html_sinks():
-    """#2 XSS: the CLI emits no HTML, and the website's scripts have no raw
-    HTML sinks or string evaluation that untrusted data could reach."""
+    """#2 XSS: the CLI emits no HTML (mail bodies are only *read*, through
+    ``html.parser``), and the website's scripts have no raw HTML sinks or
+    string evaluation that untrusted data could reach."""
     for path, tree in parsed_sources():
-        assert "html" not in {m.split(".")[0] for m in imported_modules(tree)}, path
+        html_modules = {m for m in imported_modules(tree) if m.split(".")[0] == "html"}
+        assert html_modules <= {"html.parser"}, path
     sinks = re.compile(
         r"\b(innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval)\b|new Function"
     )
@@ -60,9 +62,9 @@ def test_05_sql_injection_cwe89_parameterized_only():
         for name, node in calls(tree):
             if name.rsplit(".", 1)[-1] in {"execute", "executemany", "executescript"}:
                 query = node.args[0] if node.args else None
-                assert isinstance(query, ast.Constant) and isinstance(
-                    query.value, str
-                ), f"non-literal SQL at {path}:{node.lineno}"
+                where = f"non-literal SQL at {path}:{node.lineno}"
+                assert isinstance(query, ast.Constant), where
+                assert isinstance(query.value, str), where
 
 
 def test_09_grow_your_own_crypto_cwe327():

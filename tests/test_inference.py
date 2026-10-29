@@ -34,8 +34,8 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 @pytest.fixture
-def server():
-    _Handler.seen = []
+def server(monkeypatch):
+    monkeypatch.setattr(_Handler, "seen", [])
     httpd = HTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
@@ -47,20 +47,24 @@ def _endpoint(httpd) -> str:
     return f"http://127.0.0.1:{httpd.server_address[1]}/v1/"
 
 
-def test_successful_completion(server):
-    _Handler.reply = json.dumps({"choices": [{"message": {"content": "rewritten"}}]}).encode()
+def test_successful_completion(server, monkeypatch):
+    reply = json.dumps({"choices": [{"message": {"content": "rewritten"}}]}).encode()
+    monkeypatch.setattr(_Handler, "reply", reply)
     backend = OpenAICompatBackend(_endpoint(server), "m", offline=True, seed=7)
     assert backend.rewrite([Message("user", "hi")], 0.3) == "rewritten"
     sent = _Handler.seen[0]
-    assert sent["model"] == "m" and sent["seed"] == 7 and sent["temperature"] == 0.3
+    assert sent["model"] == "m"
+    assert sent["seed"] == 7
+    assert sent["temperature"] == 0.3
 
 
 @pytest.mark.parametrize("reply", [b"not json", b'{"choices": []}', b"\xff"])
-def test_bad_replies(server, reply):
-    _Handler.reply = reply
+def test_bad_replies(server, reply, monkeypatch):
+    monkeypatch.setattr(_Handler, "reply", reply)
     backend = OpenAICompatBackend(_endpoint(server), "m")
+    messages = [Message("user", "hi")]
     with pytest.raises(BackendError):
-        backend.rewrite([Message("user", "hi")], 0.3)
+        backend.rewrite(messages, 0.3)
 
 
 def test_endpoint_validation():
@@ -96,7 +100,8 @@ def test_make_backend(monkeypatch):
     monkeypatch.setenv("PROSELIGN_MODEL", "qwen")
     backend = make_backend()
     assert isinstance(backend, OpenAICompatBackend)
-    assert backend.endpoint.endswith(":1234/v1") and backend.model == "qwen"
+    assert backend.endpoint.endswith(":1234/v1")
+    assert backend.model == "qwen"
     monkeypatch.setenv("PROSELIGN_BACKEND", "mock")
     assert isinstance(make_backend(), MockBackend)
     with pytest.raises(UsageError):

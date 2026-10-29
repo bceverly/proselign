@@ -63,12 +63,15 @@ jobs:
           - 'Debian package (s390x, emulated)'
     steps:
       - name: Wait for ${{ matrix.check }}
-        uses: lewagon/wait-on-check-action@74049309dfeff245fe8009a0137eacf28136cb3c # v1.5.0
+        uses: lewagon/wait-on-check-action@369769072fe522a3a8a85c03c96af1e5242a1994 # v1.9.1
         with:
           ref: ${{ github.sha }}
           check-name: ${{ matrix.check }}
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 30
+          # `make release` pushes main and the tag at the same commit, so CI
+          # runs twice; both runs must pass.
+          wait-for-duplicates: true
 
   verify:
     name: Verify release
@@ -248,6 +251,7 @@ jobs:
       - name: Import signing key
         env:
           GPG_PRIVATE_KEY: ${{ secrets.LAUNCHPAD_GPG_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.LAUNCHPAD_GPG_PASSPHRASE }}
         run: |
           # Accept the key armored or base64-encoded.
           echo "$GPG_PRIVATE_KEY" | gpg --batch --import 2>/dev/null \
@@ -265,6 +269,16 @@ jobs:
             exit 1
           fi
           echo "Signing key $FPR is registered on Launchpad"
+          # Prove the passphrase unlocks it before building anything.
+          PASSFILE=$(mktemp)
+          printf '%s' "$GPG_PASSPHRASE" | tr -d '\r' > "$PASSFILE"
+          if ! echo probe | gpg --batch --yes --pinentry-mode loopback \
+              --passphrase-file "$PASSFILE" -u "$FPR" --clearsign >/dev/null; then
+            rm -f "$PASSFILE"
+            echo "::error::LAUNCHPAD_GPG_PASSPHRASE does not unlock signing key $FPR."
+            exit 1
+          fi
+          rm -f "$PASSFILE"
           echo "GPG_KEY_ID=$FPR" >> "$GITHUB_ENV"
       - name: SSH agent for SFTP upload
         env:
@@ -301,7 +315,7 @@ jobs:
           cd build/deb
           CHANGES="proselign_${VERSION}+ppa1~${SERIES}1_source.changes"
           PASSFILE=$(mktemp)
-          printf '%s' "$GPG_PASSPHRASE" > "$PASSFILE"
+          printf '%s' "$GPG_PASSPHRASE" | tr -d '\r' > "$PASSFILE"
           debsign --re-sign -k"$GPG_KEY_ID" \
             -p"gpg --batch --yes --pinentry-mode loopback --passphrase-file $PASSFILE" "$CHANGES"
           rm -f "$PASSFILE"
@@ -319,7 +333,7 @@ jobs:
           SERIES: ${{ matrix.series }}
         run: |
           WANT="${VERSION}+ppa1~${SERIES}1"
-          URL="https://api.launchpad.net/devel/~bceverly/+archive/ubuntu/proselign?ws.op=getPublishedSources&source_name=proselign&exact_match=true"
+          URL="https://api.launchpad.net/devel/~bceverly/+archive/ubuntu/proselign?ws.op=getPublishedSources&source_name=proselign"
           for _ in $(seq 1 40); do
             if curl -fsS "$URL" \
                 | jq -e --arg v "$WANT" 'any(.entries[]; .source_package_version == $v)' >/dev/null; then

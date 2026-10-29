@@ -27,9 +27,11 @@ SAMPLE_PARAGRAPHS = [
 
 @pytest.fixture(autouse=True)
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Every test gets its own empty voice store and a clean backend config."""
+    """Every test gets its own empty voice store, backend config and no rc file."""
     home = tmp_path / "home"
     monkeypatch.setenv("PROSELIGN_HOME", str(home))
+    # Never read the developer's own ~/.proselignrc.
+    monkeypatch.setenv("PROSELIGN_CONFIG", str(tmp_path / "no-proselignrc"))
     for var in ("PROSELIGN_BACKEND", "PROSELIGN_ENDPOINT", "PROSELIGN_MODEL"):
         monkeypatch.delenv(var, raising=False)
     return home

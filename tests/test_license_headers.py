@@ -73,3 +73,31 @@ def test_repository_is_clean():
     today = dt.date.today()
     bad = [p for p in clh.source_files() if clh.problems(p.read_text("utf-8"), today)]
     assert not bad
+
+
+@pytest.mark.parametrize(
+    ("holder", "expected"),
+    [("Bryan C. Everly", "Bryan C. Everly"), ("Bryan C. Everly */", "Bryan C. Everly"),
+     ("Bryan C. Everly -->  ", "Bryan C. Everly")],
+)  # fmt: skip
+def test_owner_trims_comment_closers(holder, expected):
+    assert clh.owner(holder) == expected
+
+
+def test_copyright_regex_is_linear_on_hostile_lines():
+    line = "Copyright (c) 2026 " + " \t" * 50_000 + "x"
+    assert clh.COPYRIGHT_RE.search(line) is not None
+
+
+def test_inside_root_refuses_symlinks_and_outside_paths(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    inside = root / "a.py"
+    inside.write_text("x", "utf-8")
+    outside = tmp_path / "elsewhere.py"
+    outside.write_text("x", "utf-8")
+    link = root / "link.py"
+    link.symlink_to(outside)
+    assert clh.inside_root(inside, root)
+    assert not clh.inside_root(link, root)
+    assert not clh.inside_root(outside, root)

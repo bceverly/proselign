@@ -17,7 +17,7 @@ from collections import Counter
 # a ``\s+`` before the lookahead would backtrack on long whitespace runs.
 _SENTENCE_RE = re.compile(r"(?<=[.!?])[\"')\]]{0,3} (?=[A-Z0-9\"'(\[])")
 _WORD_RE = re.compile(r"[A-Za-z]+(?:['’][A-Za-z]+)*")
-_CONTRACTION_RE = re.compile(r"\b[A-Za-z]+['’](?:t|s|re|ve|ll|d|m)\b", re.IGNORECASE)
+_CONTRACTION_RE = re.compile(r"\b[a-z]+['’](?:t|s|re|ve|ll|d|m)\b", re.IGNORECASE)
 _PASSIVE_RE = re.compile(
     r"\b(?:is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?\w+(?:ed|en)\b", re.IGNORECASE
 )

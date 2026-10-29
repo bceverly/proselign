@@ -1,0 +1,49 @@
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026 Bryan C. Everly
+#
+# Sample proselign settings.  Copy to ~/.proselignrc and keep it private:
+#
+#   install -m 600 proselignrc ~/.proselignrc
+#
+# proselign refuses the file if other users can write to it.  Command-line
+# options win over PROSELIGN_* environment variables, which win over this
+# file.  Switches take on/off, yes/no or true/false.  Delete or comment out
+# anything you do not need.
+
+[rewrite]
+# Voice used when --voice is not given.
+voice = Bryan
+# Degree of change, 0.0 (minimal) to 1.0 (full rewrite).
+strength = 0.5
+# markdown (keeps code, tables and front matter untouched) or text.
+format = markdown
+# Exit with status 4 instead of keeping the original text of a chunk that
+# fails the fidelity checks.
+strict = off
+
+[backend]
+# openai-compat (llama.cpp, Ollama, vLLM, ...) or mock.
+backend = openai-compat
+endpoint = http://127.0.0.1:8080/v1
+model = local
+# Refuse any endpoint that is not on this machine.
+offline = on
+
+[style]
+# Allow passive constructions ("the report was written").  When off, the
+# model is told to write actively and is asked to redo passages that are not.
+passive_voice = on
+# Allow en dashes (–).  When off, ranges become hyphens (2019-2021) and
+# spaced dashes become commas.
+en_dashes = on
+# Allow em dashes (—, or " -- ").  When off, they become commas.
+em_dashes = on
+# Allow exclamation marks.  When off, they become full stops.
+exclamation_marks = on
+# Allow semicolons.  When off, they split the sentence.
+semicolons = on
+# Strip common AI artifacts: "Here's the rewritten text:" preambles,
+# "Let me know if..." sign-offs, wrapping quotes or code fences, curly quotes
+# and ellipsis characters the original did not use, invisible characters,
+# and stock phrasing (delve, tapestry, it's worth noting, furthermore, ...).
+ai_artifact_filter = on

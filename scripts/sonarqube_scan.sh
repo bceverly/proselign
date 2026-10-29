@@ -30,7 +30,8 @@ install_scanner() {
   dest="$HOME/.local/opt"
   mkdir -p "$dest" "$HOME/.local/bin"
   zip="/tmp/sonar-scanner-$$.zip"
-  curl -fsSL -o "$zip" "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$SCANNER_VERSION-$platform.zip"
+  # HTTPS only, including any redirect.
+  curl -fsSL --proto '=https' --proto-redir '=https' -o "$zip" "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$SCANNER_VERSION-$platform.zip"
   rm -rf "$dest/sonar-scanner"
   unzip -q -o "$zip" -d "$dest"
   mv "$dest/sonar-scanner-$SCANNER_VERSION-$platform" "$dest/sonar-scanner"
@@ -40,11 +41,14 @@ install_scanner() {
 }
 
 server_up() {
-  curl -fs --connect-timeout 2 "$1/api/system/status" 2>/dev/null | grep -q '"status":"UP"'
+  status_url="$1/api/system/status"
+  curl -fs --connect-timeout 2 "$status_url" 2>/dev/null | grep -q '"status":"UP"'
 }
 
 scan() {  # $1 = host URL, $2 = token (may be empty)
-  set -- "-Dsonar.host.url=$1" ${2:+"-Dsonar.token=$2"}
+  host_url="$1"
+  host_token="$2"
+  set -- "-Dsonar.host.url=$host_url" ${host_token:+"-Dsonar.token=$host_token"}
   if command -v sonar-scanner >/dev/null 2>&1; then
     (cd "$ROOT" && sonar-scanner "$@")
   elif command -v docker >/dev/null 2>&1; then

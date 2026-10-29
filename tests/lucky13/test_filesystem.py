@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from proselign.errors import EXIT_OK, EXIT_VOICE
+from proselign.errors import EXIT_OK, EXIT_USAGE, EXIT_VOICE
 from proselign.ingest.corpus import find_files
 from proselign.voice.profile import MANIFEST_NAME, Voice
 
@@ -115,7 +115,8 @@ def test_11_symlink_following_cwe61_delete_and_archives(registry, tmp_path):
     registry.root.mkdir(parents=True, exist_ok=True)
     (registry.root / "bryan").symlink_to(target, target_is_directory=True)
     code, _, err = run(["delete", "Bryan"], registry=registry)
-    assert code == EXIT_VOICE and "symbolic link" in err
+    assert code == EXIT_VOICE
+    assert "symbolic link" in err
     assert (target / MANIFEST_NAME).exists()
 
     archive = tmp_path / "link.proselign"
@@ -125,4 +126,18 @@ def test_11_symlink_following_cwe61_delete_and_archives(registry, tmp_path):
         info.linkname = "/etc/passwd"
         tar.addfile(info, io.BytesIO(b""))
     code, _, err = run(["import", str(archive), "--force"], registry=registry)
-    assert code == EXIT_VOICE and "unexpected member" in err
+    assert code == EXIT_VOICE
+    assert "unexpected member" in err
+
+
+def test_06_world_writable_cwe732_settings_file(trained, tmp_path, monkeypatch):
+    """#6 (CWE-732): a ~/.proselignrc that other users can write could
+    redirect rewrites to their endpoint, so it is refused, not trusted."""
+    rc = tmp_path / "proselignrc"
+    rc.write_text("[backend]\nendpoint = http://198.51.100.7/v1\n", "utf-8")
+    os.chmod(rc, 0o666)  # nosemgrep: insecure-file-permissions - the hostile case under test
+    monkeypatch.setenv("PROSELIGN_CONFIG", str(rc))
+    code, out, err = run(["--voice", "Bryan"], "text", registry=trained)
+    assert code == EXIT_USAGE
+    assert not out
+    assert "writable by other users" in err

@@ -35,7 +35,7 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/packaging/ubuntu"
 
 # Stage only what the package needs: no VCS metadata, venvs or caches.
-cp -r "$ROOT/src" "$ROOT/tests" "$ROOT/scripts" "$ROOT/man" "$STAGE/"
+cp -r "$ROOT/src" "$ROOT/tests" "$ROOT/scripts" "$ROOT/man" "$ROOT/examples" "$STAGE/"
 cp "$ROOT/pyproject.toml" "$ROOT/README.md" "$ROOT/LICENSE" "$STAGE/"
 cp "$ROOT/packaging/ubuntu/proselign.launcher" "$STAGE/packaging/ubuntu/"
 cp -r "$ROOT/packaging/ubuntu/debian" "$STAGE/debian"

@@ -53,12 +53,17 @@ transfer tool with a hard rule that meaning comes first.
   are retried with feedback, and `--strict` turns any remaining failure into a
   non-zero exit instead of a silent change. Code blocks, tables and front matter
   never reach the model.
+- **Your house style on top.** `~/.proselignrc` sets a default voice and
+  backend and switches style rules on or off: passive voice, en and em dashes,
+  exclamation marks, semicolons, and a filter for common AI artifacts
+  (preambles, sign-offs, stock phrasing). See
+  [`examples/proselignrc`](examples/proselignrc).
 - **No runtime dependencies** beyond the Python standard library.
 
 | Command | Purpose |
 |---|---|
-| `proselign --voice NAME [FILE...]` | Rewrite stdin (or files) in a voice |
-| `proselign train --voice NAME PATH...` | Learn a voice from `.txt` / `.md` documents (`--append` to extend) |
+| `proselign --voice NAME [FILE...]` | Rewrite stdin (or files) in a voice (`--voice` may come from `~/.proselignrc`) |
+| `proselign train --voice NAME PATH...` | Learn a voice from `.txt`, `.md`, `.docx`, `.doc` and `.pdf` documents and `.mbox` sent-mail mailboxes (`--append` to extend) |
 | `proselign voices` | List voices |
 | `proselign inspect NAME` | Print a voice profile as JSON |
 | `proselign export NAME -o FILE` / `import FILE` | Portable `.proselign` archives |

@@ -80,7 +80,7 @@ export PROSELIGN_MODEL=qwen2.5:7b-instruct</code></pre>
       <p>A 4-bit 7&ndash;9B model runs well on a 12&ndash;16&nbsp;GB GPU; larger models are worth evaluating on 24&ndash;32&nbsp;GB cards. Bigger is not automatically better for style fidelity, so test with your own writing. Model weights carry their own licenses, separate from Proselign's.</p>
 
       <h2 id="quickstart">Quick start</h2>
-<pre class="code"><code># 1. Learn a voice from your own .txt and .md files
+<pre class="code"><code># 1. Learn a voice from your own documents (.txt, .md, .docx, .doc, .pdf, .mbox)
 proselign train --voice Bryan ~/Documents/Writing/
 
 # 2. Rewrite: stdout carries the result and nothing else
@@ -96,7 +96,7 @@ proselign --voice Bryan --strict --strength 0.3 &lt; contract-summary.md</code><
           <thead><tr><th>Command</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><td><code>proselign --voice NAME [FILE...]</code></td><td>Rewrite stdin (or files; <code>-</code> is stdin) in a voice. Same as <code>proselign rewrite</code>.</td></tr>
-            <tr><td><code>proselign train --voice NAME PATH...</code></td><td>Learn a voice from <code>.txt</code>/<code>.md</code> files. <code>--append</code> re-learns with additional documents.</td></tr>
+            <tr><td><code>proselign train --voice NAME PATH...</code></td><td>Learn a voice from <code>.txt</code>, <code>.md</code>, <code>.docx</code>, <code>.doc</code> (Word 6 through 2003) and <code>.pdf</code> files, and <code>.mbox</code> mailboxes of mail you sent (each message is a document; quoted replies, forwards, signatures and attachments are left out); unreadable files are skipped with a warning. <code>--append</code> re-learns with additional documents.</td></tr>
             <tr><td><code>proselign voices</code></td><td>List voices: id, name, document count (tab-separated).</td></tr>
             <tr><td><code>proselign inspect NAME</code></td><td>Print a voice's profile as JSON.</td></tr>
             <tr><td><code>proselign export NAME [-o FILE]</code></td><td>Write a portable <code>.proselign</code> archive. Corpus paths are omitted unless <code>--include-sources</code>.</td></tr>
@@ -119,6 +119,7 @@ proselign --voice Bryan --strict --strength 0.3 &lt; contract-summary.md</code><
             <tr><td><code>--seed N</code></td><td>Sampling seed for reproducible runs (0&ndash;4294967295).</td></tr>
             <tr><td><code>--max-chunk-tokens N</code></td><td>Upper bound on each rewritten chunk. Default 1500.</td></tr>
             <tr><td><code>--json-diagnostics</code></td><td>Write a JSON run report to stderr.</td></tr>
+            <tr><td><code>--config FILE</code>, <code>--no-config</code></td><td>Read settings from another file, or ignore <code>~/.proselignrc</code>.</td></tr>
           </tbody>
         </table>
       </div>
@@ -165,9 +166,28 @@ proselign --voice Bryan --strict --strength 0.3 &lt; contract-summary.md</code><
             <tr><td><code>PROSELIGN_MODEL</code></td><td>Default for <code>--model</code>.</td></tr>
             <tr><td><code>PROSELIGN_HOME</code></td><td>Override the data directory entirely.</td></tr>
             <tr><td><code>XDG_DATA_HOME</code></td><td>Base of the default data directory.</td></tr>
+            <tr><td><code>PROSELIGN_CONFIG</code></td><td>Settings file to use instead of <code>~/.proselignrc</code>.</td></tr>
           </tbody>
         </table>
       </div>
+
+      <h3>Settings file</h3>
+      <p><code>~/.proselignrc</code> is an INI file holding defaults for rewrites. Command-line options win over environment variables, which win over the file. It is refused if other users can write to it. The sample in <code>examples/proselignrc</code> (installed under <code>/usr/share/doc/proselign/examples/</code>) documents every key.</p>
+<pre class="code"><code>[rewrite]
+voice = Bryan            # used when --voice is not given
+strength = 0.5
+[backend]
+endpoint = http://127.0.0.1:11434/v1
+model = qwen2.5:14b-instruct
+offline = on
+[style]
+passive_voice = off      # write actively; passages are redone until they are
+en_dashes = off          # ranges become 2019-2021
+em_dashes = off          # the model rephrases; commas as a last resort
+exclamation_marks = on
+semicolons = on
+ai_artifact_filter = on  # preambles, sign-offs, stock phrasing, curly quotes</code></pre>
+      <p>Rules the model can break are checked after every attempt and fed back for another try; punctuation still left at the end is replaced mechanically. Quotations, inline code, URLs and e-mail addresses are never altered.</p>
 
       <h2 id="security">Security &amp; privacy</h2>
       <ul>

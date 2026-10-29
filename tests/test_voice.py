@@ -102,13 +102,21 @@ def _archive(tmp_path: Path, members: dict[str, bytes], name="evil.proselign") -
     return path
 
 
-def test_import_rejects_hostile_archives(registry, tmp_path: Path):
-    with pytest.raises(VoiceError, match="unexpected member"):
-        import_voice(registry, _archive(tmp_path, {"../../etc/passwd": b"x"}))
-    with pytest.raises(VoiceError, match="has no"):
-        import_voice(registry, _archive(tmp_path, {}, "empty.proselign"))
-    with pytest.raises(VoiceError, match="corrupt manifest"):
-        import_voice(registry, _archive(tmp_path, {MANIFEST_NAME: b"\xff\xfe"}, "bad.proselign"))
+@pytest.mark.parametrize(
+    ("members", "message"),
+    [
+        ({"../../etc/passwd": b"x"}, "unexpected member"),
+        ({}, "has no"),
+        ({MANIFEST_NAME: b"\xff\xfe"}, "corrupt manifest"),
+    ],
+)
+def test_import_rejects_hostile_archives(registry, tmp_path: Path, members, message):
+    archive = _archive(tmp_path, members)
+    with pytest.raises(VoiceError, match=message):
+        import_voice(registry, archive)
+
+
+def test_import_rejects_non_archives(registry, tmp_path: Path):
     not_tar = tmp_path / "plain.proselign"
     not_tar.write_text("hello", "utf-8")
     with pytest.raises(VoiceError, match="cannot read"):
@@ -118,5 +126,6 @@ def test_import_rejects_hostile_archives(registry, tmp_path: Path):
 def test_import_rejects_oversized_member(registry, tmp_path: Path, monkeypatch):
     monkeypatch.setattr("proselign.voice.package.MAX_MEMBER_BYTES", 4)
     assert MAX_MEMBER_BYTES > 4
+    archive = _archive(tmp_path, {MANIFEST_NAME: b"12345"})
     with pytest.raises(VoiceError, match="too large"):
-        import_voice(registry, _archive(tmp_path, {MANIFEST_NAME: b"12345"}))
+        import_voice(registry, archive)

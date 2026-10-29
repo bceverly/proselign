@@ -22,19 +22,25 @@ def make_backend(
     model: str | None = None,
     offline: bool = False,
     seed: int | None = None,
+    defaults: dict[str, str | None] | None = None,
 ) -> Backend:
     """Build a backend from explicit arguments, falling back to environment.
 
     ``PROSELIGN_BACKEND``, ``PROSELIGN_ENDPOINT`` and ``PROSELIGN_MODEL``
-    supply defaults so a shell profile can configure every invocation.
+    supply defaults so a shell profile can configure every invocation;
+    ``defaults`` (from ``~/.proselignrc``) applies when neither is given.
     """
-    name = name or os.environ.get("PROSELIGN_BACKEND", "openai-compat")
+    fallback = defaults or {}
+    name = name or os.environ.get("PROSELIGN_BACKEND") or fallback.get("backend") or "openai-compat"
     if name == "mock":
         return MockBackend()
     if name == "openai-compat":
         return OpenAICompatBackend(
-            endpoint=endpoint or os.environ.get("PROSELIGN_ENDPOINT", DEFAULT_ENDPOINT),
-            model=model or os.environ.get("PROSELIGN_MODEL", "local"),
+            endpoint=endpoint
+            or os.environ.get("PROSELIGN_ENDPOINT")
+            or fallback.get("endpoint")
+            or DEFAULT_ENDPOINT,
+            model=model or os.environ.get("PROSELIGN_MODEL") or fallback.get("model") or "local",
             offline=offline,
             seed=seed,
         )

@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from typing import TextIO
 
+from proselign import config as config_mod
 from proselign import full_version
 from proselign.errors import EXIT_ERROR, EXIT_OK, ProselignError, UsageError
 from proselign.inference import BACKENDS, make_backend
@@ -42,16 +43,14 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _add_rewrite_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--voice", "-v", required=True, help="voice to write in")
+    parser.add_argument(
+        "--voice", "-v", help="voice to write in (default: 'voice' in ~/.proselignrc)"
+    )
     parser.add_argument(
         "files", nargs="*", type=Path, help="input files (default: stdin; '-' also means stdin)"
     )
-    parser.add_argument(
-        "--strength", type=float, default=0.5, help="degree of change, 0.0-1.0 (default 0.5)"
-    )
-    parser.add_argument(
-        "--format", dest="text_format", choices=("markdown", "text"), default="markdown"
-    )
+    parser.add_argument("--strength", type=float, help="degree of change, 0.0-1.0 (default 0.5)")
+    parser.add_argument("--format", dest="text_format", choices=("markdown", "text"))
     parser.add_argument(
         "--strict",
         action="store_true",
@@ -66,6 +65,10 @@ def _add_rewrite_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--json-diagnostics", action="store_true", help="emit a JSON report on stderr"
     )
+    parser.add_argument(
+        "--config", type=Path, help="settings file (default: $PROSELIGN_CONFIG or ~/.proselignrc)"
+    )
+    parser.add_argument("--no-config", action="store_true", help="ignore the settings file")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,7 +86,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     train = sub.add_parser("train", help="learn or extend a voice from documents")
     train.add_argument("--voice", "-v", required=True)
-    train.add_argument("paths", nargs="+", type=Path, help="files or directories (.txt, .md)")
+    train.add_argument(
+        "paths",
+        nargs="+",
+        type=Path,
+        help="files or directories (.txt, .md, .docx, .doc, .pdf, .mbox)",
+    )
     train.add_argument("--append", action="store_true", help="add to an existing voice")
 
     sub.add_parser("voices", help="list stored voices")
@@ -122,15 +130,40 @@ def _read_input(files: list[Path], stdin: TextIO) -> str:
     return "".join(parts)
 
 
+def _settings(args: argparse.Namespace, io: dict) -> config_mod.Config:
+    if args.no_config:
+        return config_mod.Config()
+    settings = config_mod.load(args.config)
+    for warning in settings.warnings:
+        print(f"proselign: warning: {warning}", file=io["stderr"])
+    return settings
+
+
 def _cmd_rewrite(args: argparse.Namespace, registry: Registry, io: dict) -> int:
-    voice = registry.get(args.voice)
+    settings = _settings(args, io)
+    name = args.voice or settings.voice
+    if not name:
+        raise UsageError("no voice given: use --voice NAME or set 'voice' in ~/.proselignrc")
+    voice = registry.get(name)
     options = Options(
-        strength=args.strength,
-        strict=args.strict,
+        strength=_first(args.strength, settings.strength, 0.5),
+        strict=args.strict or settings.strict,
         max_chunk_tokens=args.max_chunk_tokens,
-        text_format=args.text_format,
+        text_format=_first(args.text_format, settings.text_format, "markdown"),
+        rules=settings.rules,
     )
-    backend = make_backend(args.backend, args.endpoint, args.model, args.offline, args.seed)
+    backend = make_backend(
+        args.backend,
+        args.endpoint,
+        args.model,
+        args.offline or settings.offline,
+        args.seed,
+        defaults={
+            "backend": settings.backend,
+            "endpoint": settings.endpoint,
+            "model": settings.model,
+        },
+    )
     rewriter = Rewriter(voice, backend, options)
     try:
         result = rewriter.rewrite(_read_input(args.files, io["stdin"]))
@@ -146,6 +179,11 @@ def _cmd_rewrite(args: argparse.Namespace, registry: Registry, io: dict) -> int:
     return EXIT_OK
 
 
+def _first(*values):
+    """The first value that is not ``None``."""
+    return next(v for v in values if v is not None)
+
+
 def _cmd_train(args: argparse.Namespace, registry: Registry, io: dict) -> int:
     base = None
     if registry.exists(args.voice):
@@ -155,7 +193,11 @@ def _cmd_train(args: argparse.Namespace, registry: Registry, io: dict) -> int:
                 f"or 'proselign delete {args.voice}' first"
             )
         base = registry.get(args.voice)
-    voice = build_voice(args.voice, args.paths, base)
+
+    def skipped(path: Path, reason: str) -> None:
+        print(f"proselign: warning: skipped {path}: {reason}", file=io["stderr"])
+
+    voice = build_voice(args.voice, args.paths, base, on_skip=skipped)
     path = registry.save(voice)
     summary = voice.corpus_summary
     print(

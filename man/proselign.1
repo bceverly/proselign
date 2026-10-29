@@ -5,8 +5,8 @@
 proselign \- learn a writer's prose style and align text to it, locally
 .SH SYNOPSIS
 .B proselign
-.B \-\-voice
-.I NAME
+.RB [ \-\-voice
+.IR NAME ]
 .RI [ options ]
 .RI [ FILE ...]
 .br
@@ -50,13 +50,24 @@ the command fails).
 .SH COMMANDS
 .TP
 .B train
-Measure the
-.B .txt
-and
-.B .md
-documents under each
+Measure the documents under each
 .I PATH
-and store the resulting voice. Hidden files and directories are skipped.
+and store the resulting voice: plain text and Markdown
+.RB ( .txt ", " .md ),
+Word
+.RB ( .docx ,
+and
+.B .doc
+from Word 6 through 2003),
+.B .pdf
+and
+.B .mbox
+mailboxes.
+Text is extracted without running any other program. A mailbox should hold
+mail you sent: each message counts as a document, and quoted replies,
+forwarded messages, signatures and attachments are left out. Hidden files and
+directories are skipped; a file that cannot be read (damaged, encrypted,
+or a scanned PDF with no text) is skipped with a warning.
 .B \-\-append
 re-learns an existing voice from its previous sources plus the new ones.
 .TP
@@ -114,6 +125,15 @@ Upper bound on the size of each rewritten chunk. Default 1500.
 .TP
 .B \-\-json\-diagnostics
 Write a JSON run report to standard error.
+.TP
+.BI \-\-config " FILE"
+Read settings from
+.I FILE
+instead of
+.IR ~/.proselignrc .
+.TP
+.B \-\-no\-config
+Ignore the settings file.
 .SH ENVIRONMENT
 .TP
 .B PROSELIGN_BACKEND\fR, \fBPROSELIGN_ENDPOINT\fR, \fBPROSELIGN_MODEL
@@ -122,11 +142,46 @@ Defaults for the matching options.
 .B PROSELIGN_HOME
 Overrides the data directory.
 .TP
+.B PROSELIGN_CONFIG
+Settings file to read instead of
+.IR ~/.proselignrc .
+.TP
 .B XDG_DATA_HOME
 Voices are stored in
 .IR $XDG_DATA_HOME/proselign/voices ,
 default
 .IR ~/.local/share/proselign/voices .
+.SH FILES
+.TP
+.I ~/.proselignrc
+INI settings for rewrites. Section
+.B [rewrite]
+sets
+.BR voice ,
+.BR strength ,
+.B format
+and
+.BR strict ;
+.B [backend]
+sets
+.BR backend ,
+.BR endpoint ,
+.B model
+and
+.BR offline ;
+.B [style]
+switches
+.BR passive_voice ,
+.BR en_dashes ,
+.BR em_dashes ,
+.BR exclamation_marks ,
+.B semicolons
+and
+.B ai_artifact_filter
+on or off. Command-line options override environment variables, which
+override this file. The file is refused if other users can write to it.
+A commented sample is installed as
+.IR /usr/share/doc/proselign/examples/proselignrc .
 .SH EXIT STATUS
 .TP
 .B 0
