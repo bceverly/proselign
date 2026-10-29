@@ -66,6 +66,27 @@ class Report:
     fallbacks: int = 0
     language_fixes: int = 0
     warnings: list[str] = field(default_factory=list)
+    unit: str = "chunk"
+    kept_problems: list[list[str]] = field(default_factory=list)
+    style_problems: list[list[str]] = field(default_factory=list)
+
+    def summary(self) -> list[str]:
+        """At most two lines: what was kept as written, and why; which style
+        rules were not fully met.  ``warnings`` holds every detail."""
+        lines = []
+        for what, groups in (
+            ("kept the original text of", self.kept_problems),
+            ("style rules not fully met in", self.style_problems),
+        ):
+            if groups:
+                counts: dict[str, int] = {}
+                for problems in groups:
+                    for category in dict.fromkeys(_category(p) for p in problems):
+                        counts[category] = counts.get(category, 0) + 1
+                reasons = ", ".join(f"{name} ({count})" for name, count in counts.items())
+                plural = self.unit if len(groups) == 1 else f"{self.unit}s"
+                lines.append(f"{what} {len(groups)} {plural}: {reasons}")
+        return lines
 
 
 def _is_verbatim_block(block: str) -> bool:
@@ -176,7 +197,8 @@ class Rewriter:
         if self.options.strict:
             raise ValidationError(f"rewrite failed fidelity checks: {detail}")
         self.report.fallbacks += 1
-        self.report.warnings.append(f"kept original text for one chunk: {detail}")
+        self.report.kept_problems.append(problems)
+        self.report.warnings.append(f"kept original text for one {self.report.unit}: {detail}")
         return source
 
     def _attempt(self, core: str) -> tuple[str | None, list[str]]:
@@ -207,6 +229,7 @@ class Rewriter:
         if best is not None and not protect.missing(core, best):
             remaining = style.violations(core, best, rules)
             if remaining:
+                self.report.style_problems.append(remaining)
                 self.report.warnings.append(f"style rules not fully met: {_summarize(remaining)}")
             return best, []
         return None, feedback or []
@@ -248,6 +271,7 @@ class Rewriter:
         a time.  Fidelity failures keep the original paragraph.
         """
         results = list(units)
+        self.report.unit = "paragraph"
         self.progress.begin(len(units), "paragraphs")
         for batch in self._unit_batches(units):
             parts = None
@@ -310,3 +334,24 @@ def _summarize(problems: list[str], limit: int = 5) -> str:
     shown = "; ".join(problems[:limit])
     more = len(problems) - limit
     return f"{shown}; and {more} more" if more > 0 else shown
+
+
+_CATEGORIES = (
+    ("rewrite these passive", "passive voice"),
+    ("replace stock AI", "AI phrasing"),
+    ("use the first person plural", "singular pronouns"),
+    ("rephrase to use no", "forbidden punctuation"),
+    ("quotation ", "quotation reworded"),
+    ("number ", "number changed"),
+    ("markup ", "formatting lost"),
+    ("the rewrite switched to", "language drift"),
+    ("the rewrite was empty", "empty reply"),
+)
+
+
+def _category(problem: str) -> str:
+    """A short name for the kind of problem ``problem`` describes."""
+    for prefix, name in _CATEGORIES:
+        if problem.startswith(prefix):
+            return name
+    return problem.split(" ", 1)[0] + " changed"  # url, email, citation, inline_code

@@ -69,6 +69,9 @@ def _add_rewrite_args(parser: argparse.ArgumentParser) -> None:
         "--json-diagnostics", action="store_true", help="emit a JSON report on stderr"
     )
     parser.add_argument(
+        "--verbose", action="store_true", help="list every warning instead of a summary"
+    )
+    parser.add_argument(
         "--config", type=Path, help="settings file (default: $PROSELIGN_CONFIG or ~/.proselignrc)"
     )
     parser.add_argument("--no-config", action="store_true", help="ignore the settings file")
@@ -192,8 +195,11 @@ def _cmd_rewrite(args: argparse.Namespace, registry: Registry, io: dict) -> int:
         if args.json_diagnostics:
             print(json.dumps(report.__dict__, sort_keys=True), file=io["stderr"])
         else:
-            for warning in report.warnings:
-                print(f"proselign: warning: {warning}", file=io["stderr"])
+            lines = report.warnings if args.verbose else report.summary()
+            for line in lines:
+                print(f"proselign: warning: {line}", file=io["stderr"])
+            if lines and not args.verbose:
+                print("proselign: run with --verbose for details", file=io["stderr"])
     if args.output:
         write_private_file(args.output, result.encode("utf-8"))
     else:

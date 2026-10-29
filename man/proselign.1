@@ -126,6 +126,11 @@ Upper bound on the size of each rewritten chunk. Default 1500.
 .B \-\-json\-diagnostics
 Write a JSON run report to standard error.
 .TP
+.B \-\-verbose
+List every warning, one per chunk or paragraph. By default warnings are
+summarized in at most two lines: text kept as written, and style rules not
+fully met, each with a count per reason.
+.TP
 .BI \-\-output " FILE\fR, " \-o " FILE"
 Write the result to
 .I FILE

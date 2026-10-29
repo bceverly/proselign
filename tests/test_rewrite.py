@@ -11,10 +11,12 @@ from proselign.errors import UsageError, ValidationError
 from proselign.inference.base import Backend, Message
 from proselign.inference.mock import MockBackend
 from proselign.rewrite import protect
-from proselign.rewrite.engine import Options, Rewriter, segment
+from proselign.rewrite.engine import Options, Report, Rewriter, segment
 from proselign.rewrite.markers import extract_input
 from proselign.rewrite.prompt import build_messages, strength_guidance
 from proselign.voice.profile import Voice
+
+from .conftest import run
 
 BEGIN = "<<<PROSELIGN_INPUT_"
 
@@ -240,3 +242,35 @@ def test_drift_alongside_lost_tokens_skips_the_fix():
     rewriter = Rewriter(VOICE, backend, Options())
     assert rewriter.rewrite("Keep 42.") == "Keep 42."
     assert len(backend.prompts) == 2 and "DATA" in backend.prompts[1][0].content
+
+
+def test_report_summary_groups_problems_by_kind():
+    report = Report(unit="paragraph")
+    assert not report.summary()
+    report.kept_problems = [
+        ["quotation '\"a\"' appears 1x", "quotation '\"b\"' appears 1x", "number '4' appears 1x"],
+        ["markup '<s1>' appears 1x", "url 'http://x' appears 1x"],
+    ]
+    report.style_problems = [["rewrite these passive constructions in the active voice: 'x'"]]
+    assert report.summary() == [
+        "kept the original text of 2 paragraphs: quotation reworded (1), number changed (1), "
+        "formatting lost (1), url changed (1)",
+        "style rules not fully met in 1 paragraph: passive voice (1)",
+    ]
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_cli_prints_a_summary_unless_verbose(trained, monkeypatch, verbose):
+    from proselign.inference import mock  # pylint: disable=import-outside-toplevel
+
+    monkeypatch.setattr(mock.MockBackend, "rewrite", lambda self, m, t: "Lost the figure.")
+    argv = ["--voice", "Bryan", "--backend", "mock"] + (["--verbose"] if verbose else [])
+    code, out, err = run(argv, "We have 42.\n\nAnd 7 more.\n", registry=trained)
+    assert code == 0 and out == "We have 42.\n\nAnd 7 more.\n"
+    if verbose:
+        assert "kept original text for one chunk: number '42'" in err
+        assert "--verbose" not in err
+    else:
+        assert "kept the original text of 1 chunk: number changed (1)" in err
+        assert "'42'" not in err
+        assert "run with --verbose for details" in err

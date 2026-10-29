@@ -48,6 +48,8 @@ parts, `MAJOR.MINOR.PATCH.BUILD`, as in the SysManage projects.
   page from Word's gallery, or a short first page (under 250 words) ending in
   a page or section break. `keep_title_page = off` in `~/.proselignrc`
   rewrites it too.
+- Warnings are summarized in at most two lines, with a count per reason;
+  `--verbose` lists them all.
 - An animated progress line with elapsed time and an estimate of the time
   left, on by default when stderr is a terminal; `--no-progress` or
   `progress = off` in `~/.proselignrc` hides it.
