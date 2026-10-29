@@ -27,8 +27,8 @@ jobs:
     name: MITRE Lucky 13
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: '3.12'
       - name: Install hash-locked dev dependencies
@@ -52,8 +52,8 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: '3.12'
       - name: Install hash-locked tooling
@@ -71,7 +71,7 @@ jobs:
             --sarif --output semgrep.sarif src scripts packaging
       - name: Upload Semgrep results to code scanning
         if: always() && hashFiles('semgrep.sarif') != ''
-        uses: github/codeql-action/upload-sarif@89a39a4e59826350b863aa6b6252a07ad50cf83e # v4
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         with:
           sarif_file: semgrep.sarif
           category: semgrep
@@ -80,8 +80,8 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v6
         with:
           python-version: '3.12'
       - name: Install hash-locked dev dependencies
@@ -105,7 +105,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: moderate
@@ -115,14 +115,14 @@ jobs:
     name: Secrets scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
         with:
           fetch-depth: 0
       - name: Gitleaks
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: TruffleHog (verified secrets only)
-        uses: trufflesecurity/trufflehog@ec1d9a6b4b7ce070eff34bd09e7cbd95ce1e2412 # main-2026-02-22
+        uses: trufflesecurity/trufflehog@69734591624d2afb8e152fcc8f3c2325ab577dae # main-2026-02-22
         with:
           extra_args: --only-verified
