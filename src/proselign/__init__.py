@@ -3,7 +3,7 @@
 
 """Proselign: learn a writer's prose style and align text to it, locally."""
 
-__version__ = "1.0.0.2"
+__version__ = "1.0.0.3"
 
 
 def full_version() -> str:
