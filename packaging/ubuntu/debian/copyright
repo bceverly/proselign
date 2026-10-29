@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: proselign
-Upstream-Contact: Bryan C. Everly <bceverly@gmail.com>
+Upstream-Contact: Bryan C. Everly <bryan@theeverlys.com>
 Source: https://github.com/bceverly/proselign
 
 Files: *

@@ -91,8 +91,10 @@ else
   fi
   token=${SONAR_TOKEN:-}
   if [ -z "$token" ]; then
-    # A fresh server still has admin/admin; mint a short-lived analysis token.
-    token=$(curl -fs -u "${SONAR_LOCAL_USER:-admin}:${SONAR_LOCAL_PASSWORD:-admin}" -X POST \
+    # A fresh local container still has SonarQube's documented first-boot
+    # login; mint a short-lived analysis token with it (or with your own).
+    local_login="${SONAR_LOCAL_USER:-admin}:${SONAR_LOCAL_PASSWORD:-admin}"
+    token=$(curl -fs -u "$local_login" -X POST \
       "$LOCAL_URL/api/user_tokens/generate" -d "name=proselign-$(date +%s)" \
       | sed -n 's/.*"token":"\([^"]*\)".*/\1/p') || true
     [ -n "$token" ] || echo "[WARN] could not mint a token; set SONAR_TOKEN for your local server"

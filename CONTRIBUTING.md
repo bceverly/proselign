@@ -91,7 +91,7 @@ packages to `ppa:bceverly/proselign`.
 | Secret | Used by | How to get it |
 |---|---|---|
 | `SONAR_TOKEN` | `sonarcloud.yml` | sonarcloud.io → import `bceverly/proselign` into organization `bceverly` (project key `bceverly_proselign`) → *My Account → Security → Generate token*. Also in the project: *Administration → Analysis Method* → turn **off** Automatic Analysis. |
-| `LAUNCHPAD_GPG_KEY` | `build-and-release.yml` | `gpg --armor --export-secret-keys KEYID` (armored or base64). The key must be registered on your Launchpad account and one of its UIDs must use `bceverly@gmail.com`, the address in `debian/control` and the changelog. |
+| `LAUNCHPAD_GPG_KEY` | `build-and-release.yml` | `gpg --armor --export-secret-keys KEYID` (armored or base64). The key must be registered on your Launchpad account and one of its UIDs must use `bryan@theeverlys.com`, the address in `debian/control` and the changelog. |
 | `LAUNCHPAD_GPG_PASSPHRASE` | `build-and-release.yml` | The passphrase for that key. |
 | `LAUNCHPAD_SSH_KEY` | `build-and-release.yml` | A dedicated private SSH key (`ssh-keygen -t ed25519 -f lp_upload`) whose public half is added at launchpad.net → *SSH keys*. Uploads use SFTP. |
 | `SAFETY_API_KEY` | `security.yml` (optional) | platform.safetycli.com → API keys. Without it the Safety step is skipped. |

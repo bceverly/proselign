@@ -19,7 +19,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 VERSION=${2:-$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "$ROOT/src/proselign/__init__.py")}
 SERIES=${3:-}
 DEBFULLNAME=${DEBFULLNAME:-Bryan C. Everly}
-DEBEMAIL=${DEBEMAIL:-bceverly@gmail.com}
+DEBEMAIL=${DEBEMAIL:-bryan@theeverlys.com}
 
 case "$MODE" in
   binary) DEBVER=$VERSION; DIST=${SERIES:-unstable} ;;

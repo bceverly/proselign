@@ -3,7 +3,9 @@
 name: Build and Release
 
 # Runs when `make release` pushes a vW.X.Y.Z tag (four-part, like sysmanage):
-#   verify   -> the tag matches __version__; lint, Lucky 13 and tests pass
+#   wait-for-ci -> every CI job (lint, tests on 3.10-3.14 incl. Lucky 13, .deb
+#               builds on each LTS and s390x) passed on the tagged commit
+#   verify   -> the tag matches __version__
 #   build    -> Python sdist + wheel; .deb packages for amd64 and arm64 (native
 #               runners) and ppc64el and s390x (QEMU-emulated; no free runners)
 #   release  -> GitHub release with every artifact and SHA256SUMS
@@ -33,17 +35,50 @@ permissions:
 
 env:
   DEBFULLNAME: Bryan C. Everly
-  DEBEMAIL: bceverly@gmail.com
+  DEBEMAIL: bryan@theeverlys.com
 
 jobs:
+  # Release only what CI has already passed.  ci.yml also runs on release
+  # tags, so these checks exist on the tagged commit even when the tag is
+  # pushed on its own.  The names must match ci.yml's job names.
+  wait-for-ci:
+    name: Wait for CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      checks: read
+    strategy:
+      fail-fast: true
+      matrix:
+        check:
+          - 'Lint'
+          - 'Test (Python 3.10)'
+          - 'Test (Python 3.11)'
+          - 'Test (Python 3.12)'
+          - 'Test (Python 3.13)'
+          - 'Test (Python 3.14)'
+          - 'Debian package (ubuntu:22.04)'
+          - 'Debian package (ubuntu:24.04)'
+          - 'Debian package (ubuntu:26.04)'
+          - 'Debian package (s390x, emulated)'
+    steps:
+      - name: Wait for ${{ matrix.check }}
+        uses: lewagon/wait-on-check-action@74049309dfeff245fe8009a0137eacf28136cb3c # v1.5.0
+        with:
+          ref: ${{ github.sha }}
+          check-name: ${{ matrix.check }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 30
+
   verify:
     name: Verify release
+    needs: wait-for-ci
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       - name: Install hash-locked dev dependencies
@@ -54,27 +89,21 @@ jobs:
         run: python scripts/check_version.py
       - id: version
         run: echo "version=$(python -c 'import proselign; print(proselign.__version__)')" >> "$GITHUB_OUTPUT"
-      - name: Lint
-        run: make lint VENV_ACTIVATE= PYTHON=python
-      - name: MITRE "Lucky 13" unforgivable vulnerabilities (Christey 2007)
-        run: python -m pytest tests/lucky13 -m lucky13 -v --tb=short -p no:cacheprovider
-      - name: Tests with coverage floor
-        run: make test VENV_ACTIVATE= PYTHON=python
 
   build-python:
     name: Python sdist + wheel
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
       - name: Build
         run: |
           python -m pip install --require-hashes --no-deps -r requirements-dev.txt
           python -m build --no-isolation --outdir dist/
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: python-dist
           path: dist/*
@@ -94,7 +123,7 @@ jobs:
     # Built on the oldest supported LTS so the package installs on all of them.
     container: ubuntu:22.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build dependencies
         env:
           DEBIAN_FRONTEND: noninteractive
@@ -110,7 +139,7 @@ jobs:
         run: |
           apt-get install -y -qq ./build/deb/proselign_*_${{ matrix.arch }}.deb
           proselign --version | grep -F "${{ needs.verify.outputs.version }}"
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deb-${{ matrix.arch }}
           path: build/deb/proselign_*.deb
@@ -128,7 +157,7 @@ jobs:
           - arch: s390x       # big-endian: the package's tests run there too
             platform: linux/s390x
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: ${{ matrix.platform }}
@@ -148,7 +177,7 @@ jobs:
               apt-get install -y -qq ./build/deb/proselign_*_"$ARCH".deb >/dev/null
               proselign --version | grep -F "$VERSION"
             '
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: deb-${{ matrix.arch }}
           path: build/deb/proselign_*.deb
@@ -161,7 +190,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: artifacts
           merge-multiple: true
@@ -189,7 +218,7 @@ jobs:
 
           Verify downloads with \`sha256sum -c SHA256SUMS\`.
           EOF
-      - uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: artifacts/*
           body_path: release_notes.md
@@ -210,7 +239,7 @@ jobs:
         # the PPA's Processors settings.
         series: [jammy, noble, resolute]
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Packaging tools
         run: |
           sudo apt-get update -qq
@@ -226,8 +255,17 @@ jobs:
           echo "pinentry-mode loopback" >> ~/.gnupg/gpg.conf
           echo "allow-loopback-pinentry" >> ~/.gnupg/gpg-agent.conf
           gpg-connect-agent reloadagent /bye
-          KEY_ID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec/ {print $5; exit}')
-          echo "GPG_KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
+          gpg --list-secret-keys --keyid-format long
+          FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/ {print $10; exit}')
+          # Launchpad silently discards uploads signed by a key it does not
+          # know (no email, no error), so check the key is registered first.
+          if ! curl -fsS "https://api.launchpad.net/devel/~bceverly/gpg_keys" \
+              | jq -e --arg f "$FPR" 'any(.entries[]; .fingerprint == $f)' >/dev/null; then
+            echo "::error::Signing key $FPR is not registered on launchpad.net/~bceverly (OpenPGP keys); Launchpad would discard the upload."
+            exit 1
+          fi
+          echo "Signing key $FPR is registered on Launchpad"
+          echo "GPG_KEY_ID=$FPR" >> "$GITHUB_ENV"
       - name: SSH agent for SFTP upload
         env:
           SSH_KEY: ${{ secrets.LAUNCHPAD_SSH_KEY }}
@@ -272,4 +310,23 @@ jobs:
             echo "dput attempt $attempt failed; retrying in $((attempt * 30))s"
             sleep $((attempt * 30))
           done
+          exit 1
+      - name: Wait for Launchpad to accept the upload
+        # A finished dput only means the files reached the upload server;
+        # Launchpad accepts or rejects them a few minutes later.
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          SERIES: ${{ matrix.series }}
+        run: |
+          WANT="${VERSION}+ppa1~${SERIES}1"
+          URL="https://api.launchpad.net/devel/~bceverly/+archive/ubuntu/proselign?ws.op=getPublishedSources&source_name=proselign&exact_match=true"
+          for _ in $(seq 1 40); do
+            if curl -fsS "$URL" \
+                | jq -e --arg v "$WANT" 'any(.entries[]; .source_package_version == $v)' >/dev/null; then
+              echo "Launchpad accepted proselign $WANT"
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::proselign $WANT did not appear in the PPA within 20 minutes. Check email from Launchpad for a rejection; no email means the signature was not recognised."
           exit 1

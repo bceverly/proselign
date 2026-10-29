@@ -121,7 +121,7 @@ names its number and CWE, and CI runs them as their own named step.
 | 3 | Directory traversal (23) | `../`, absolute and NUL-laden voice names; traversal members in voice archives |
 | 4 | Remote file inclusion (98) | No `eval`/`exec`/dynamic import; no pickle-family loaders; archives are JSON only |
 | 5 | SQL injection (89) | Every `execute()` must take a literal query (gate for the upcoming SQLite store) |
-| 6 | World-writable files (276) | Under `umask 000` the voice store is 0700, manifests 0600, exports 0644 |
+| 6 | World-writable files (276) | Under `umask 000` the voice store is 0700, manifests 0600, exports 0600 |
 | 7 | Direct request (425) | Proselign never binds or listens; it only connects to the endpoint you configure |
 | 8 | `authenticated=1` (472) | Forged prompt delimiters in input stay data (per-request random nonces); archive manifests cannot choose their own location |
 | 9 | Home-grown crypto (327) | SHA-2 via hashlib and `secrets` only; no MD5/SHA-1, `random` or XOR |

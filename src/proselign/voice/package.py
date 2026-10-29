@@ -41,13 +41,15 @@ def export_voice(
 
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(output, flags, 0o644)
+        # Owner-only, like the voice store: a profile describes how one person
+        # writes.  Sharing it is a deliberate act (chmod, or send the file).
+        fd = os.open(output, flags, 0o600)
     except OSError as exc:
         raise VoiceError(f"cannot write {output}: {exc.strerror}") from exc
     with os.fdopen(fd, "wb") as handle, tarfile.open(fileobj=handle, mode="w:gz") as tar:
         info = tarfile.TarInfo(MANIFEST_NAME)
         info.size = len(payload)
-        info.mode = 0o644
+        info.mode = 0o600
         tar.addfile(info, io.BytesIO(payload))
     return output
 

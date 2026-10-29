@@ -14,6 +14,21 @@ updates:
     groups:
       python-tooling:
         patterns: ['*']
+    ignore:
+      # semgrep pins mcp==1.29.0 exactly (still true of semgrep 1.182.1), so
+      # no update can be resolved until semgrep moves; reviewed exception in
+      # .pip-audit-ignore.  Remove this when semgrep allows mcp >= 1.30.0.
+      - dependency-name: mcp
+      # The fix (filelock 4.2.1+) needs Python 3.11, and safety 3.8.1 pins
+      # filelock<4.0.  The locks already use 4.2.4 wherever Python allows it;
+      # the 3.x pins (Python 3.10 lane, safety venv) are reviewed exceptions in
+      # .pip-audit-ignore.  Remove this when safety allows filelock 4.
+      - dependency-name: filelock
+      # semgrep pins the opentelemetry-* family to ~=1.37.0 (telemetry we run
+      # with --metrics=off); reviewed exception in .pip-audit-ignore.  The LLM
+      # lock gets opentelemetry-api via fastapi and is refreshed by
+      # `make lock-upgrade`.  Remove this when semgrep moves past 1.37.
+      - dependency-name: 'opentelemetry-*'
 
   # Actions are pinned by commit SHA; Dependabot bumps the SHA and the
   # version comment together.

@@ -1,0 +1,4 @@
+# Reviewed findings that are not secrets, by gitleaks fingerprint.
+# SonarQube's documented first-boot login for a throwaway local container
+# (scripts/sonarqube_scan.sh); rewritten so it no longer matches.
+c6684b027bd996addb84baba068b4eeb43a339b8:scripts/sonarqube_scan.sh:curl-auth-user:95

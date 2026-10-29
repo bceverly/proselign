@@ -19,3 +19,6 @@ parts, `MAJOR.MINOR.PATCH.BUILD`, as in the SysManage projects.
 - Ubuntu packaging for 22.04, 24.04 and 26.04 LTS (amd64, arm64) and the
   `ppa:bceverly/proselign` release pipeline.
 - Project website (proselign.org).
+
+### Changed
+- `proselign export` writes archives owner-only (0600) instead of 0644.

@@ -45,10 +45,10 @@ def test_06_world_writable_cwe276_store_private_under_umask_0(corpus, isolated_h
 
 
 def test_06_world_writable_cwe276_exported_archive(trained, tmp_path, umask_zero):
-    """#6: exported archives are shareable (0644) but never world-writable."""
+    """#6: exported archives are owner-only (0600), even under umask 000."""
     out = tmp_path / "b.proselign"
     assert run(["export", "Bryan", "-o", str(out)], registry=trained)[0] == EXIT_OK
-    assert stat.S_IMODE(out.stat().st_mode) == 0o644
+    assert stat.S_IMODE(out.stat().st_mode) == 0o600
 
 
 def test_06_world_writable_cwe276_repository_tree():

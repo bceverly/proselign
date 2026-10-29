@@ -3,7 +3,7 @@
 Source: proselign
 Section: text
 Priority: optional
-Maintainer: Bryan C. Everly <bceverly@gmail.com>
+Maintainer: Bryan C. Everly <bryan@theeverlys.com>
 Build-Depends: debhelper-compat (= 13),
                dh-python,
                python3-all (>= 3.10),
