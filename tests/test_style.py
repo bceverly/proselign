@@ -84,7 +84,7 @@ def test_directives_for_a_formal_voice_and_strict_rules():
         assert phrase in text
     assert "stock AI" not in text
     strict = "\n".join(directives(_voice(contractions_per_1k=5), STRICT))
-    for phrase in ("occasionally", "active voice only", "en dashes", "em dashes", "semicolons"):
+    for phrase in ("sparingly", "active voice only", "en dashes", "em dashes", "semicolons"):
         assert phrase in strict
     assert directives(Voice(display_name="Empty"), StyleRules())
 

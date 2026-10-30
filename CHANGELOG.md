@@ -50,6 +50,17 @@ parts, `MAJOR.MINOR.PATCH.BUILD`, as in the SysManage projects.
   rewrites it too.
 - Warnings are summarized in at most two lines, with a count per reason;
   `--verbose` lists them all.
+- Voices learn more of the author: vocabulary habits (preferred plain words,
+  model-favoured words never used, frequent sentence openers, serial comma,
+  spelling) and up to 200 typical passages, which are shown to the model as
+  examples chosen by topic (`--examples`, default 3). Passages stay local and
+  are left out of exports. Retrain a voice to gain them.
+- Rewrites are measured against the voice: one round of feedback when sentence
+  length or contractions are far off, and `--candidates N` keeps the closest
+  of N rewrites (a function-word distance in the style of Burrows' Delta).
+- `proselign eval` round-trips sample passages through neutral prose and back
+  and reports how much of the gap to the author's own writing was closed, so
+  models and settings can be compared.
 - An animated progress line with elapsed time and an estimate of the time
   left, on by default when stderr is a terminal; `--no-progress` or
   `progress = off` in `~/.proselignrc` hides it.

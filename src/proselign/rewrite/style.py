@@ -146,14 +146,16 @@ def directives(voice: Voice, rules: StyleRules) -> list[str]:
     if sentence.get("mean"):
         out.append(
             f"Average about {round(sentence['mean'])} words per sentence; half of the "
-            f"sentences have {round(sentence['median'])} words or fewer. Mix short and "
-            "long sentences rather than making them uniform."
+            f"sentences have {round(sentence.get('median', sentence['mean']))} words or fewer. "
+            "Mix short and long sentences rather than making them uniform, and do not "
+            "shorten the author's sentences on principle."
         )
     paragraph = m.get("paragraph_length_sentences", {}).get("mean")
     if paragraph:
         out.append(f"Keep paragraphs to about {max(1, round(paragraph))} sentence(s).")
     out.extend(_rate_directives(m, rules))
     out.extend(_punctuation_directives(m.get("punctuation_per_1k", {}), rules))
+    out.extend(lexicon_directives(voice.lexicon or {}))
     if rules.ai_filter:
         out.append(
             "Avoid stock AI phrasing (for example: delve, tapestry, testament to, "
@@ -162,13 +164,44 @@ def directives(voice: Voice, rules: StyleRules) -> list[str]:
     return out
 
 
+def lexicon_directives(lexicon: dict) -> list[str]:
+    """Word-choice instructions learned from the author's vocabulary."""
+    out = []
+    prefers = lexicon.get("prefers", [])[:10]
+    if prefers:
+        pairs = ", ".join(f"'{p['prefer']}' (not '{p['over']}')" for p in prefers)
+        out.append(f"Choose the author's plain words: {pairs}.")
+    avoids = lexicon.get("avoids", [])[:20]
+    if avoids:
+        out.append(f"The author never writes these words; do not use them: {', '.join(avoids)}.")
+    openers = lexicon.get("openers", [])[:6]
+    if openers:
+        quoted = ", ".join(f"'{o},'" for o in openers)
+        out.append(f"Sentence openers the author often uses, where they fit: {quoted}.")
+    conventions = lexicon.get("conventions", {})
+    if conventions.get("serial_comma") is True:
+        out.append("Use the serial (Oxford) comma: 'red, white, and blue'.")
+    elif conventions.get("serial_comma") is False:
+        out.append("No serial comma: 'red, white and blue'.")
+    if conventions.get("spelling"):
+        out.append(f"Use {conventions['spelling']} spelling.")
+    return out
+
+
 def _rate_directives(m: dict, rules: StyleRules) -> list[str]:
     out = []
     contractions = m.get("contractions_per_1k", 0)
+    # A concrete rate: "occasionally" alone makes models contract far too often.
+    every = round(1000 / contractions, -1) if contractions else 0
     if contractions >= 8:
-        out.append("Use contractions freely (don't, it's, we're, I'd).")
+        out.append(
+            f"Use contractions freely (don't, it's, we're), about one every {every:.0f} words."
+        )
     elif contractions >= 3:
-        out.append("Use contractions occasionally, not in every sentence.")
+        out.append(
+            f"Use contractions sparingly: about one every {every:.0f} words; write most "
+            "words out in full."
+        )
     else:
         out.append("Avoid contractions; write words out in full.")
     out.extend(_person_directives(m.get("first_person_per_1k", 0), rules))

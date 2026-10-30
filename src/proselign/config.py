@@ -27,6 +27,7 @@ _STRINGS = {("rewrite", "voice"), ("backend", "backend"), ("backend", "endpoint"
 _STRINGS |= {("backend", "model"), ("rewrite", "format")}
 _BOOLEANS = {("rewrite", "strict"), ("rewrite", "progress"), ("backend", "offline")}
 _BOOLEANS |= {("rewrite", "keep_title_page")}
+_INTEGERS = {("rewrite", "candidates"), ("rewrite", "examples")}
 # [style] key -> StyleRules field
 _STYLE_KEYS = {
     "passive_voice": "passive_voice",
@@ -49,6 +50,8 @@ class Config:  # pylint: disable=too-many-instance-attributes  # one per setting
     strict: bool = False
     progress: bool = True
     keep_title_page: bool = True
+    candidates: int | None = None
+    examples: int | None = None
     backend: str | None = None
     endpoint: str | None = None
     model: str | None = None
@@ -114,6 +117,8 @@ def _apply(
         setattr(config, name, parser.get(section, key).strip() or None)
     elif item in _BOOLEANS:
         setattr(config, key, parser.getboolean(section, key))
+    elif item in _INTEGERS:
+        setattr(config, key, parser.getint(section, key))
     elif item == ("rewrite", "strength"):
         config.strength = parser.getfloat(section, key)
     elif section == "style" and key in _STYLE_KEYS:

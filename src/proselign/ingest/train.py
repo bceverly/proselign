@@ -11,6 +11,8 @@ from pathlib import Path
 
 from proselign.errors import UsageError
 from proselign.ingest.corpus import load_documents
+from proselign.ingest.examples import select_examples
+from proselign.ingest.lexicon import build_lexicon
 from proselign.ingest.stylometry import describe, measure, words
 from proselign.voice.profile import Voice
 
@@ -51,6 +53,10 @@ def build_voice(
     voice = base or Voice(display_name=name)
     voice.metrics = metrics
     voice.style = describe(metrics)
+    voice.lexicon = build_lexicon(corpus)
+    voice.examples = select_examples(
+        (doc.text for doc in documents), metrics["sentence_length_words"]["mean"]
+    )
     voice.corpus_summary = {
         "documents": sum(doc.parts for doc in documents),
         "words": total_words,

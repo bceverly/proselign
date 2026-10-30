@@ -57,6 +57,10 @@ class Voice:  # pylint: disable=too-many-instance-attributes
     style: dict[str, Any] = field(default_factory=dict)
     metrics: dict[str, Any] = field(default_factory=dict)
     genre_profiles: dict[str, Any] = field(default_factory=dict)
+    # Diction: function-word rates, word preferences, openers, conventions.
+    lexicon: dict[str, Any] = field(default_factory=dict)
+    # Typical passages of the author's own prose (private; see export).
+    examples: list[str] = field(default_factory=list)
     corpus_summary: dict[str, Any] = field(
         default_factory=lambda: {"documents": 0, "tokens_estimated": 0}
     )

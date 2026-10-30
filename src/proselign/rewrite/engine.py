@@ -16,12 +16,15 @@ from dataclasses import dataclass, field
 from proselign.errors import UsageError, ValidationError
 from proselign.inference.base import Backend
 from proselign.progress import NoProgress
-from proselign.rewrite import protect, style
+from proselign.rewrite import protect, scoring, style
+from proselign.rewrite.exemplars import Library
 from proselign.rewrite.prompt import build_language_fix, build_messages
 from proselign.rewrite.style import StyleRules
 from proselign.voice.profile import Voice
 
 MAX_CHUNK_TOKENS = 1_000_000
+MAX_CANDIDATES = 5
+MAX_EXAMPLES = 8
 
 _FENCE_OPEN_RE = re.compile(r"^(\s{0,3})(`{3,}|~{3,})")
 _ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
@@ -47,6 +50,8 @@ class Options:
     max_repairs: int = 2
     text_format: str = "markdown"
     rules: StyleRules = field(default_factory=StyleRules)
+    candidates: int = 1  # rewrites generated per attempt; the closest to the voice wins
+    examples: int = 3  # passages of the author's writing shown per chunk
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.strength <= 1.0:
@@ -55,6 +60,10 @@ class Options:
             raise UsageError(f"--max-chunk-tokens must be between 64 and {MAX_CHUNK_TOKENS}")
         if self.text_format not in ("text", "markdown"):
             raise UsageError("--format must be 'text' or 'markdown'")
+        if not 1 <= self.candidates <= MAX_CANDIDATES:
+            raise UsageError(f"--candidates must be between 1 and {MAX_CANDIDATES}")
+        if not 0 <= self.examples <= MAX_EXAMPLES:
+            raise UsageError(f"--examples must be between 0 and {MAX_EXAMPLES}")
 
 
 @dataclass
@@ -181,6 +190,7 @@ class Rewriter:
         self.options = options or Options()
         self.report = Report()
         self.progress = NoProgress()  # the CLI swaps in a visible one
+        self._library: Library | None = None
 
     def _temperature(self) -> float:
         return round(0.1 + 0.6 * self.options.strength, 2)
@@ -204,26 +214,27 @@ class Rewriter:
     def _attempt(self, core: str) -> tuple[str | None, list[str]]:
         """The best faithful rewrite of ``core``, or None and the last problems."""
         rules = self.options.rules
+        examples = self._examples(core)
         feedback: list[str] | None = None
         best: str | None = None  # faithful, but still breaking a style rule
         for attempt in range(self.options.max_repairs + 1):
-            messages = build_messages(self.voice, core, self.options.strength, feedback, rules)
-            reply = self.backend.rewrite(messages, self._temperature()).strip()
-            candidate = protect.repair_quotations(core, style.clean(core, reply, rules))
-            problems = protect.missing(core, candidate)
-            drift = protect.foreign_script(core, candidate)
-            if drift and not problems:
-                candidate, drift = self._fix_language(core, candidate)
-            problems += drift
-            if not candidate:
-                problems = ["the rewrite was empty"]
+            messages = build_messages(
+                self.voice, core, self.options.strength, feedback, rules, examples
+            )
+            results = [self._candidate(core, messages, k) for k in range(self.options.candidates)]
+            faithful = [text for text, problems in results if not problems]
+            if not faithful:
+                feedback = results[0][1]
+                continue
+            candidate = min(faithful, key=lambda text: scoring.distance(text, self.voice))
+            problems = style.violations(core, candidate, rules)
+            if not attempt:  # one nudge toward the profile; it is approximate
+                problems += scoring.drift(candidate, self.voice, self.options.strength)
             if not problems:
-                problems = style.violations(core, candidate, rules)
-                if not problems:
-                    if attempt:
-                        self.report.repaired += 1
-                    return candidate, []
-                best = style.punctuate(candidate, rules)
+                if attempt:
+                    self.report.repaired += 1
+                return candidate, []
+            best = style.punctuate(candidate, rules)
             feedback = problems
 
         if best is not None and not protect.missing(core, best):
@@ -233,6 +244,39 @@ class Rewriter:
                 self.report.warnings.append(f"style rules not fully met: {_summarize(remaining)}")
             return best, []
         return None, feedback or []
+
+    def _candidate(self, core: str, messages, variant: int) -> tuple[str, list[str]]:
+        """One cleaned rewrite of ``core`` and its fidelity problems."""
+        rules = self.options.rules
+        reply = self._reply(messages, variant).strip()
+        candidate = protect.repair_quotations(core, style.clean(core, reply, rules))
+        problems = protect.missing(core, candidate)
+        drift = protect.foreign_script(core, candidate)
+        if drift and not problems:
+            candidate, drift = self._fix_language(core, candidate)
+        problems += drift
+        if not candidate:
+            problems = ["the rewrite was empty"]
+        return candidate, problems
+
+    def _reply(self, messages, variant: int) -> str:
+        """The backend's reply; each extra candidate gets its own sampling seed."""
+        seed = getattr(self.backend, "seed", None)
+        if not variant or seed is None:
+            return self.backend.rewrite(messages, self._temperature())
+        self.backend.seed = (seed + variant) % 2**32  # type: ignore[attr-defined]
+        try:
+            return self.backend.rewrite(messages, self._temperature())
+        finally:
+            self.backend.seed = seed  # type: ignore[attr-defined]
+
+    def _examples(self, core: str) -> list[str]:
+        """The author's passages to show alongside ``core``."""
+        if not self.options.examples or not self.voice.examples:
+            return []
+        if self._library is None:
+            self._library = Library(self.voice.examples)
+        return self._library.pick(core, self.options.examples)
 
     def _fix_language(self, core: str, candidate: str) -> tuple[str, list[str]]:
         """Translate the stray fragments of a rewrite that drifted into another
@@ -338,6 +382,7 @@ def _summarize(problems: list[str], limit: int = 5) -> str:
 
 _CATEGORIES = (
     ("rewrite these passive", "passive voice"),
+    ("match the author's", "voice drift"),
     ("replace stock AI", "AI phrasing"),
     ("use the first person plural", "singular pronouns"),
     ("rephrase to use no", "forbidden punctuation"),

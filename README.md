@@ -45,7 +45,10 @@ transfer tool with a hard rule that meaning comes first.
   against a model *you* serve locally through any OpenAI-compatible endpoint
   (llama.cpp, vLLM, Ollama, LM Studio). `--offline` enforces loopback only.
 - **A voice is data, not a model.** A small, portable, versioned JSON profile:
-  measured stylometric features kept separate from interpretive style hints.
+  measured stylometric features kept separate from interpretive style hints,
+  the author's vocabulary habits, and typical passages of their own writing
+  that are shown to the model as examples (kept local, never exported by
+  default).
   No per-author fine-tuning is required (LoRA adapters may come later, if
   benchmarks justify them).
 - **Meaning first.** Protected tokens (numbers, URLs, quotations, citations,
@@ -68,6 +71,7 @@ transfer tool with a hard rule that meaning comes first.
 | `proselign train --voice NAME PATH...` | Learn a voice from `.txt`, `.md`, `.docx`, `.doc` and `.pdf` documents and `.mbox` sent-mail mailboxes (`--append` to extend) |
 | `proselign voices` | List voices |
 | `proselign inspect NAME` | Print a voice profile as JSON |
+| `proselign eval --voice NAME` | Measure how closely rewrites reproduce the voice (compare models and settings) |
 | `proselign export NAME -o FILE` / `import FILE` | Portable `.proselign` archives |
 | `proselign delete NAME` | Remove a voice |
 

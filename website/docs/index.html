@@ -97,6 +97,7 @@ proselign --voice Bryan --strict --strength 0.3 &lt; contract-summary.md</code><
           <tbody>
             <tr><td><code>proselign --voice NAME [FILE...]</code></td><td>Rewrite stdin (or files; <code>-</code> is stdin) in a voice. Same as <code>proselign rewrite</code>.</td></tr>
             <tr><td><code>proselign train --voice NAME PATH...</code></td><td>Learn a voice from <code>.txt</code>, <code>.md</code>, <code>.docx</code>, <code>.doc</code> (Word 6 through 2003) and <code>.pdf</code> files, and <code>.mbox</code> mailboxes of mail you sent (each message is a document; quoted replies, forwards, signatures and attachments are left out); unreadable files are skipped with a warning. <code>--append</code> re-learns with additional documents.</td></tr>
+            <tr><td><code>proselign eval --voice NAME</code></td><td>Round-trip sample passages through neutral prose and back, and report how much of the gap to the author's own writing the rewrite closed. Accepts the rewrite options, so models (<code>--model</code>) and settings (<code>--examples</code>, <code>--candidates</code>) can be compared.</td></tr>
             <tr><td><code>proselign voices</code></td><td>List voices: id, name, document count (tab-separated).</td></tr>
             <tr><td><code>proselign inspect NAME</code></td><td>Print a voice's profile as JSON.</td></tr>
             <tr><td><code>proselign export NAME [-o FILE]</code></td><td>Write a portable <code>.proselign</code> archive. Corpus paths are omitted unless <code>--include-sources</code>.</td></tr>
@@ -121,6 +122,8 @@ proselign --voice Bryan --strict --strength 0.3 &lt; contract-summary.md</code><
             <tr><td><code>--json-diagnostics</code></td><td>Write a JSON run report to stderr.</td></tr>
             <tr><td><code>--verbose</code></td><td>List every warning instead of the two-line summary.</td></tr>
             <tr><td><code>--output FILE</code>, <code>-o FILE</code></td><td>Write the result to <code>FILE</code> instead of stdout. Required for a <code>.docx</code> input.</td></tr>
+            <tr><td><code>--examples N</code></td><td>Passages of the voice's own writing shown to the model per chunk (0&ndash;8, default 3).</td></tr>
+            <tr><td><code>--candidates N</code></td><td>Rewrites per chunk; the one closest to the voice is kept (1&ndash;5, default 1).</td></tr>
             <tr><td><code>--no-progress</code></td><td>Hide the animated progress line (done/total, elapsed time, estimated time left) that is shown on a terminal by default.</td></tr>
             <tr><td><code>--config FILE</code>, <code>--no-config</code></td><td>Read settings from another file, or ignore <code>~/.proselignrc</code>.</td></tr>
           </tbody>

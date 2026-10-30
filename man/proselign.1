@@ -32,6 +32,12 @@ proselign \- learn a writer's prose style and align text to it, locally
 .br
 .B proselign delete
 .I NAME
+.br
+.B proselign eval \-\-voice
+.I NAME
+.RB [ \-\-samples
+.IR N ]
+.RB [ \-\-json ]
 .SH DESCRIPTION
 .B proselign
 is a filter. It reads text from standard input (or the named files), rewrites
@@ -70,6 +76,22 @@ directories are skipped; a file that cannot be read (damaged, encrypted,
 or a scanned PDF with no text) is skipped with a warning.
 .B \-\-append
 re-learns an existing voice from its previous sources plus the new ones.
+Besides the measurements, training keeps the author's vocabulary habits
+(preferred words, words never used, frequent sentence openers, serial comma,
+spelling) and up to 200 typical passages, which are shown to the model as
+examples. The passages stay in the local voice store and are left out of
+exports.
+.TP
+.B eval
+Measure how closely rewrites reproduce a voice: sample passages are
+flattened into neutral prose by the model and rewritten back in the voice
+(without themselves among the examples), and a stylometric distance is
+reported for each version, with the share of the gap the rewrite closed.
+Accepts the rewrite options, so models and settings can be compared.
+.B \-\-samples
+sets the number of passages (default 8);
+.B \-\-json
+prints the result as JSON.
 .TP
 .B voices
 List stored voices, one per line: identifier, display name, document count,
@@ -119,6 +141,14 @@ Refuse any endpoint that is not a loopback address.
 .TP
 .BI \-\-seed " N"
 Sampling seed, for reproducible runs.
+.TP
+.BI \-\-examples " N"
+Passages of the voice's own writing shown to the model per chunk, 0 to 8.
+Default 3.
+.TP
+.BI \-\-candidates " N"
+Rewrites generated per chunk, 1 to 5; the one stylometrically closest to
+the voice is kept. Default 1.
 .TP
 .BI \-\-max\-chunk\-tokens " N"
 Upper bound on the size of each rewritten chunk. Default 1500.
@@ -186,9 +216,11 @@ sets
 .BR strength ,
 .BR format ,
 .BR strict ,
-.B progress
+.BR progress ,
+.BR keep_title_page ,
+.B examples
 and
-.BR keep_title_page ;
+.BR candidates ;
 .B [backend]
 sets
 .BR backend ,

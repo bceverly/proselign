@@ -19,6 +19,7 @@ from proselign import config as config_mod
 from proselign import full_version
 from proselign import progress as progress_mod
 from proselign.errors import EXIT_ERROR, EXIT_OK, ProselignError, UsageError
+from proselign.evaluate import evaluate, report_text
 from proselign.inference import BACKENDS, make_backend
 from proselign.ingest.train import build_voice
 from proselign.paths import write_private_file
@@ -27,7 +28,7 @@ from proselign.rewrite.engine import Options, Rewriter
 from proselign.voice.package import ARCHIVE_SUFFIX, export_voice, import_voice
 from proselign.voice.registry import Registry
 
-SUBCOMMANDS = ("rewrite", "train", "voices", "inspect", "export", "import", "delete")
+SUBCOMMANDS = ("rewrite", "eval", "train", "voices", "inspect", "export", "import", "delete")
 
 EPILOG = """examples:
   proselign train --voice Bryan ~/Documents/Writing/
@@ -45,20 +46,12 @@ class _Parser(argparse.ArgumentParser):
         raise UsageError(f"{self.prog}: {message}")
 
 
-def _add_rewrite_args(parser: argparse.ArgumentParser) -> None:
+def _add_model_args(parser: argparse.ArgumentParser) -> None:
+    """Options shared by every command that calls the model."""
     parser.add_argument(
         "--voice", "-v", help="voice to write in (default: 'voice' in ~/.proselignrc)"
     )
-    parser.add_argument(
-        "files", nargs="*", type=Path, help="input files (default: stdin; '-' also means stdin)"
-    )
     parser.add_argument("--strength", type=float, help="degree of change, 0.0-1.0 (default 0.5)")
-    parser.add_argument("--format", dest="text_format", choices=("markdown", "text"))
-    parser.add_argument(
-        "--strict",
-        action="store_true",
-        help="fail (exit 4) instead of keeping original text when fidelity checks fail",
-    )
     parser.add_argument("--backend", choices=BACKENDS, help="inference backend")
     parser.add_argument("--endpoint", help="OpenAI-compatible base URL (default local)")
     parser.add_argument("--model", help="model name to request from the endpoint")
@@ -66,10 +59,14 @@ def _add_rewrite_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--seed", type=int, help="sampling seed, for reproducible runs")
     parser.add_argument("--max-chunk-tokens", type=int, default=1500)
     parser.add_argument(
-        "--json-diagnostics", action="store_true", help="emit a JSON report on stderr"
+        "--examples",
+        type=int,
+        help="passages of the voice's own writing shown per chunk, 0-8 (default 3)",
     )
     parser.add_argument(
-        "--verbose", action="store_true", help="list every warning instead of a summary"
+        "--candidates",
+        type=int,
+        help="rewrites per chunk; the closest to the voice is kept, 1-5 (default 1)",
     )
     parser.add_argument(
         "--config", type=Path, help="settings file (default: $PROSELIGN_CONFIG or ~/.proselignrc)"
@@ -79,6 +76,25 @@ def _add_rewrite_args(parser: argparse.ArgumentParser) -> None:
         "--no-progress",
         action="store_true",
         help="hide the progress line (shown by default on a terminal)",
+    )
+
+
+def _add_rewrite_args(parser: argparse.ArgumentParser) -> None:
+    _add_model_args(parser)
+    parser.add_argument(
+        "files", nargs="*", type=Path, help="input files (default: stdin; '-' also means stdin)"
+    )
+    parser.add_argument("--format", dest="text_format", choices=("markdown", "text"))
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="fail (exit 4) instead of keeping original text when fidelity checks fail",
+    )
+    parser.add_argument(
+        "--json-diagnostics", action="store_true", help="emit a JSON report on stderr"
+    )
+    parser.add_argument(
+        "--verbose", action="store_true", help="list every warning instead of a summary"
     )
     parser.add_argument(
         "--output", "-o", type=Path, help="write here instead of stdout (required for .docx)"
@@ -97,6 +113,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="COMMAND", parser_class=_Parser)
 
     _add_rewrite_args(sub.add_parser("rewrite", help="rewrite stdin in a voice (default)"))
+
+    scorer = sub.add_parser("eval", help="measure how closely rewrites match a voice")
+    _add_model_args(scorer)
+    scorer.add_argument(
+        "--samples", type=int, default=8, help="passages to round-trip, 1-100 (default 8)"
+    )
+    scorer.add_argument("--json", action="store_true", help="print the result as JSON")
 
     train = sub.add_parser("train", help="learn or extend a voice from documents")
     train.add_argument("--voice", "-v", required=True)
@@ -153,7 +176,8 @@ def _settings(args: argparse.Namespace, io: dict) -> config_mod.Config:
     return settings
 
 
-def _cmd_rewrite(args: argparse.Namespace, registry: Registry, io: dict) -> int:
+def _setup(args: argparse.Namespace, registry: Registry, io: dict):
+    """Settings, voice, options and backend for a command that calls the model."""
     settings = _settings(args, io)
     name = args.voice or settings.voice
     if not name:
@@ -161,10 +185,12 @@ def _cmd_rewrite(args: argparse.Namespace, registry: Registry, io: dict) -> int:
     voice = registry.get(name)
     options = Options(
         strength=_first(args.strength, settings.strength, 0.5),
-        strict=args.strict or settings.strict,
+        strict=getattr(args, "strict", False) or settings.strict,
         max_chunk_tokens=args.max_chunk_tokens,
-        text_format=_first(args.text_format, settings.text_format, "markdown"),
+        text_format=_first(getattr(args, "text_format", None), settings.text_format, "markdown"),
         rules=settings.rules,
+        candidates=_first(args.candidates, settings.candidates, 1),
+        examples=_first(args.examples, settings.examples, 3),
     )
     backend = make_backend(
         args.backend,
@@ -178,9 +204,33 @@ def _cmd_rewrite(args: argparse.Namespace, registry: Registry, io: dict) -> int:
             "model": settings.model,
         },
     )
-    rewriter = Rewriter(voice, backend, options)
+    return settings, voice, options, backend
+
+
+def _progress(args: argparse.Namespace, settings: config_mod.Config, io: dict):
     if settings.progress and not args.no_progress and progress_mod.wanted(io["stderr"]):
-        rewriter.progress = progress_mod.Progress(io["stderr"])
+        return progress_mod.Progress(io["stderr"])
+    return progress_mod.NoProgress()
+
+
+def _cmd_eval(args: argparse.Namespace, registry: Registry, io: dict) -> int:
+    settings, voice, options, backend = _setup(args, registry, io)
+    progress = _progress(args, settings, io)
+    try:
+        result = evaluate(voice, backend, options, args.samples, args.seed or 0, progress)
+    finally:
+        progress.close()
+    if args.json:
+        io["stdout"].write(json.dumps(result, indent=2) + "\n")
+    else:
+        io["stdout"].write(report_text(result, getattr(backend, "model", backend.name)))
+    return EXIT_OK
+
+
+def _cmd_rewrite(args: argparse.Namespace, registry: Registry, io: dict) -> int:
+    settings, voice, options, backend = _setup(args, registry, io)
+    rewriter = Rewriter(voice, backend, options)
+    rewriter.progress = _progress(args, settings, io)
     try:
         if any(path.suffix.lower() == ".docx" for path in args.files):
             return _rewrite_docx(args, rewriter, io, settings)
@@ -274,7 +324,10 @@ def _cmd_voices(_args: argparse.Namespace, registry: Registry, io: dict) -> int:
 
 
 def _cmd_inspect(args: argparse.Namespace, registry: Registry, io: dict) -> int:
-    io["stdout"].write(json.dumps(registry.get(args.voice).to_dict(), indent=2) + "\n")
+    data = registry.get(args.voice).to_dict()
+    # The passages are the author's own words: show how many, not the text.
+    data["examples"] = f"{len(data['examples'])} passages (stored privately)"
+    io["stdout"].write(json.dumps(data, indent=2) + "\n")
     return EXIT_OK
 
 
@@ -301,6 +354,7 @@ def _cmd_delete(args: argparse.Namespace, registry: Registry, io: dict) -> int:
 
 COMMANDS = {
     "rewrite": _cmd_rewrite,
+    "eval": _cmd_eval,
     "train": _cmd_train,
     "voices": _cmd_voices,
     "inspect": _cmd_inspect,

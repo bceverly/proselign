@@ -25,6 +25,12 @@ strict = off
 progress = on
 # Leave a Word document's title or cover page completely untouched.
 keep_title_page = on
+# Passages of the voice's own writing shown to the model with each chunk
+# (0-8).  Examples are the strongest style signal; 0 turns them off.
+examples = 3
+# Rewrites generated per chunk (1-5); the one closest to the voice is kept.
+# Each extra candidate costs another model call.
+candidates = 1
 
 [backend]
 # openai-compat (llama.cpp, Ollama, vLLM, ...) or mock.
