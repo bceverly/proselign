@@ -35,6 +35,9 @@ class NoProgress:
     def close(self) -> None:
         """Nothing to erase."""
 
+    def finish(self) -> None:
+        """Nothing to report."""
+
 
 def wanted(stream: TextIO) -> bool:
     """Whether a progress line belongs on ``stream``."""
@@ -51,7 +54,7 @@ def _clock(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes}:{secs:02d}"
 
 
-class Progress:
+class Progress:  # pylint: disable=too-many-instance-attributes  # display state
     """Tracks ``done`` of ``total`` items and draws them on ``stream``."""
 
     def __init__(self, stream: TextIO, clock: Callable[[], float] = time.monotonic) -> None:
@@ -60,7 +63,8 @@ class Progress:
         self.total = 0
         self.done = 0
         self.noun = "items"
-        self.started = clock()
+        self.started = self.opened = clock()
+        self.shown = False
         self.frame = 0
         unicode = "utf" in (getattr(stream, "encoding", "") or "").lower()
         # (spinner frames, filled cell, empty cell)
@@ -75,6 +79,8 @@ class Progress:
         self.total, self.done, self.noun = max(total, 0), 0, noun
         self.started = self.clock()
         if self._thread is None and self.total:
+            self.shown = True
+            self._stop.clear()  # a line closed earlier can be shown again
             self._thread = threading.Thread(target=self._animate, daemon=True)
             self._thread.start()
 
@@ -118,6 +124,13 @@ class Progress:
             self._thread.join()
             self._thread = None
             self.stream.write("\r\x1b[K")
+            self.stream.flush()
+
+    def finish(self) -> None:
+        """Erase the line and, if it was shown, say how long the whole run took."""
+        self.close()
+        if self.shown:
+            self.stream.write(f"proselign: finished in {_clock(self.clock() - self.opened)}\n")
             self.stream.flush()
 
     def _animate(self) -> None:

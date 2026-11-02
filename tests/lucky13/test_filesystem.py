@@ -135,7 +135,9 @@ def test_06_world_writable_cwe732_settings_file(trained, tmp_path, monkeypatch):
     redirect rewrites to their endpoint, so it is refused, not trusted."""
     rc = tmp_path / "proselignrc"
     rc.write_text("[backend]\nendpoint = http://198.51.100.7/v1\n", "utf-8")
-    os.chmod(rc, 0o666)  # nosemgrep: insecure-file-permissions - the hostile case under test
+    # The hostile case under test: readable and writable by everyone.
+    everyone = stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH
+    os.chmod(rc, everyone | stat.S_IWOTH)  # nosemgrep: insecure-file-permissions
     monkeypatch.setenv("PROSELIGN_CONFIG", str(rc))
     code, out, err = run(["--voice", "Bryan"], "text", registry=trained)
     assert code == EXIT_USAGE

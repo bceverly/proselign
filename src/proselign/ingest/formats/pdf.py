@@ -261,10 +261,18 @@ class _Interpreter:
         return [(y, "".join(parts)) for y, parts in self.lines if "".join(parts).strip()]
 
     def _operator(self, op: str, args: list) -> None:
-        state = self.state
         handler = _SETTERS.get(op)
         if handler is not None and args:
-            handler(state, args)
+            handler(self.state, args)
+        self._position(op, args)
+        if op in ("Tj", "'", '"') and args:
+            self._show(args[-1])
+        elif op == "TJ" and args:
+            self._show_array(args[-1])
+
+    def _position(self, op: str, args: list) -> None:
+        """The font and text-position operators."""
+        state = self.state
         if op == "Tf" and len(args) >= 2:
             self.font = self.fonts.get(args[0])
             state.size = float(args[1]) or 1.0
@@ -282,10 +290,6 @@ class _Interpreter:
             self._goto(float(args[4]), float(args[5]))
         elif op in ("T*", "'", '"'):
             self._goto(state.origin_x, state.origin_y - state.leading * state.v_scale)
-        if op in ("Tj", "'", '"') and args:
-            self._show(args[-1])
-        elif op == "TJ" and args:
-            self._show_array(args[-1])
 
     def _show(self, raw) -> None:
         if not isinstance(raw, bytes) or self.font is None:

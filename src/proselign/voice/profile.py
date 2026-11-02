@@ -65,6 +65,8 @@ class Voice:  # pylint: disable=too-many-instance-attributes
         default_factory=lambda: {"documents": 0, "tokens_estimated": 0}
     )
     sources: list[dict[str, Any]] = field(default_factory=list)
+    # The model fine-tuned on this voice, if any (``proselign tune``).
+    tuned: dict[str, Any] = field(default_factory=dict)
     license_and_consent: dict[str, Any] = field(
         default_factory=lambda: {"raw_examples_exportable": False}
     )

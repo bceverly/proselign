@@ -21,7 +21,16 @@ from proselign.voice.profile import Voice
 
 _MARKUP = re.compile(r"\[\[\d+\]\]|</?s\d+>")
 MIN_WORDS_TO_STEER = 80
-STEER_STRENGTH = 0.5
+# Only a full restyle gets the extra steering round: at moderate strength it
+# cost a second model call per passage and did not bring rewrites closer.
+STEER_STRENGTH = 0.75
+
+
+_GAP_FEATURES = (
+    ("sentence length", lambda m: m["sentence_length_words"]["mean"]),
+    ("word length", lambda m: m["mean_word_length"]),
+    ("contractions", lambda m: m["contractions_per_1k"]),
+)
 
 
 def _plain(text: str) -> str:
@@ -40,29 +49,33 @@ def function_word_rates(text: str) -> dict[str, float]:
 
 def distance(text: str, voice: Voice) -> float:
     """Stylistic distance from ``text`` to ``voice`` (0 is identical)."""
+    return round(sum(distance_parts(text, voice).values()), 4)
+
+
+def distance_parts(text: str, voice: Voice) -> dict[str, float]:
+    """``distance`` split into what each feature contributes; the parts add
+    up to the whole.  A feature the voice has no measurement for is left out."""
     text = _plain(text)
     target = voice.lexicon.get("function_words", {}) if voice.lexicon else {}
     rates = function_word_rates(text)
     common = sorted(target, key=target.get, reverse=True)[:50]
-    lexical = (
-        sum(min(abs(rates[w] - target[w]) / (target[w] + 5.0), 1.0) for w in common) / len(common)
-        if common
-        else 0.0
-    )
+    parts: dict[str, float] = {}
+    if common:
+        parts["function words"] = sum(
+            min(abs(rates[w] - target[w]) / (target[w] + 5.0), 1.0) for w in common
+        ) / len(common)
     metrics, wanted = measure(text), voice.metrics or {}
-    gaps = []
-    for read in (
-        lambda m: m["sentence_length_words"]["mean"],
-        lambda m: m["mean_word_length"],
-        lambda m: m["contractions_per_1k"],
-    ):
+    gaps = {}
+    for name, read in _GAP_FEATURES:
         try:
             mine, theirs = read(metrics), read(wanted)
         except (KeyError, TypeError):
             continue
         # Capped, so one quirk of a short text (a single contraction) cannot dominate.
-        gaps.append(min(abs(mine - theirs) / (abs(theirs) + 2.0), 1.0))
-    return round(lexical + (sum(gaps) / len(gaps) if gaps else 0.0), 4)
+        gaps[name] = min(abs(mine - theirs) / (abs(theirs) + 2.0), 1.0)
+    # The gaps share one unit of weight between them, as the function words do.
+    parts.update({name: gap / len(gaps) for name, gap in gaps.items()})
+    return parts
 
 
 def drift(text: str, voice: Voice, strength: float) -> list[str]:

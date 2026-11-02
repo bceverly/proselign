@@ -13,7 +13,15 @@ proselign \- learn a writer's prose style and align text to it, locally
 .B proselign train \-\-voice
 .I NAME
 .RB [ \-\-append ]
+.RB [ \-\-min\-words
+.IR N ]
 .IR PATH ...
+.br
+.B proselign tune \-\-voice
+.I NAME
+.RB [ \-\-base
+.IR HF_MODEL ]
+.RB [ \-\-pairs\-only ]
 .br
 .B proselign voices
 .br
@@ -47,12 +55,29 @@ and writes the result to standard output. Standard output carries the
 rewritten text and nothing else; all diagnostics go to standard error.
 .PP
 Facts, numbers, names, URLs, citations, quotations, code and Markdown
-structure are preserved. Fenced code blocks, tables, HTML blocks and front
-matter are copied verbatim and never sent to the model. Each rewritten chunk
-is checked to confirm protected tokens survived; failures are retried with
-feedback, and if they still fail the original text is kept (or, with
+structure are preserved. Fenced code blocks, tables, HTML blocks, front
+matter, e-mail headers and plain-text headings are copied verbatim and never
+sent to the model. Numbers, document identifiers (such as Bates numbers),
+quotations, URLs, e-mail addresses and list labels are sent as placeholders
+and put back afterwards. Each rewritten chunk is checked: every protected
+token, name and acronym must survive, as must every negation and modal verb
+(not, never, may, will, could), every sentence (none dropped or invented),
+and who is speaking and addressed; its length must stay close to the
+original's. A failed chunk is retried once with feedback.
+.PP
+Then each rewrite is reviewed sentence by sentence. Only sentences that need
+work are changed: one that breaks a style rule, runs far longer than the
+author's sentences, or spells out what the author contracts. The model is
+told which ones, and every other sentence is left exactly as written. A
+changed sentence must keep its protected tokens, names, negations, modal
+verbs and persons and add no name, and then a second model is asked only
+whether the two say the same thing. A sentence that fails any of this gets
+the original back (or, with
 .BR \-\-strict ,
-the command fails).
+the command fails). Dropped sentences are restored and added ones removed;
+list markers, the case of a sentence's first word and the whitespace between
+sentences always come from the original. These checks are strong but not
+perfect: read the changes before sending anything that matters.
 .SH COMMANDS
 .TP
 .B train
@@ -76,6 +101,11 @@ directories are skipped; a file that cannot be read (damaged, encrypted,
 or a scanned PDF with no text) is skipped with a warning.
 .B \-\-append
 re-learns an existing voice from its previous sources plus the new ones.
+.BI \-\-min\-words " N"
+leaves out documents (and mailbox messages) shorter than
+.I N
+words, so the voice is learned from considered writing rather than quick
+notes; an appended voice keeps its threshold.
 Besides the measurements, training keeps the author's vocabulary habits
 (preferred words, words never used, frequent sentence openers, serial comma,
 spelling) and up to 200 typical passages, which are shown to the model as
@@ -88,10 +118,67 @@ flattened into neutral prose by the model and rewritten back in the voice
 (without themselves among the examples), and a stylometric distance is
 reported for each version, with the share of the gap the rewrite closed.
 Accepts the rewrite options, so models and settings can be compared.
+Settings that depart from the author's habits on purpose
+.RB ( passive_voice " = off, " first_person " other than " voice )
+are set aside for the measurement, and the report names them.
+The neutral versions are kept in the voice's directory (never exported) and
+reused by later runs, so different models and settings are measured from the
+same starting texts;
+.B \-\-fresh
+writes new ones with the current model.
+Because any rewrite changes wording, the neutral texts are also rewritten
+with no voice as a control, and the report says how much closer the voiced
+rewrite came to the author than the control did;
+.B \-\-no\-control
+skips it (about a third faster).
+.B \-\-repeats
+.I N
+(1\-10) rewrites every passage N times and reports the average with its
+range across the runs, to tell a real difference from noise.
+A second table splits each distance into what function words, sentence
+length, word length and contractions contribute.
+.B \-\-ablate
+rewrites every passage again once for each part of the voice, with that
+part left out (sentence length, contractions, person, passive voice, word
+length, punctuation, vocabulary, tone, the example passages, the steering
+feedback), and reports whether each part helps or hurts; use it with
+.B \-\-repeats
+2 or more.
 .B \-\-samples
 sets the number of passages (default 8);
 .B \-\-json
 prints the result as JSON.
+.TP
+.B tune
+Fine-tune a model on a voice, so rewrites come from a model that has
+learned the author's writing rather than one told about it. Passages of the
+voice's source documents are flattened into neutral prose by the current
+.BR \-\-model ,
+giving pairs of neutral and original text (with facts masked as
+placeholders on both sides); these are kept with the voice and reused. A
+LoRA adapter is then trained on them (QLoRA, the base in 4-bit), converted
+to GGUF and registered with Ollama as
+.BI proselign\- NAME
+on top of the same base model. Rewrites and
+.B eval
+in that voice then use the tuned model with a short prompt, unless
+.B \-\-model
+or
+.B \-\-no\-tuned
+is given;
+.B eval
+of a tuned voice uses only the 20 passages held out of training.
+Training needs a CUDA GPU (16 GB is enough for a 14B model) and the
+training extras
+.RB ( "pip install 'proselign[tune]'" ).
+.B \-\-base
+names the Hugging Face weights behind
+.B \-\-model
+(default Qwen/Qwen2.5\-14B\-Instruct);
+.BR \-\-epochs " (default 2), " \-\-rank " (default 16) and " \-\-name
+adjust the training;
+.B \-\-pairs\-only
+writes the pairs and stops.
 .TP
 .B voices
 List stored voices, one per line: identifier, display name, document count,
@@ -151,15 +238,42 @@ Rewrites generated per chunk, 1 to 5; the one stylometrically closest to
 the voice is kept. Default 1.
 .TP
 .BI \-\-max\-chunk\-tokens " N"
-Upper bound on the size of each rewritten chunk. Default 1500.
+Upper bound on the size of each rewritten chunk. Default 400, about a
+paragraph or two: small chunks fit a 4,096-token context and cost little to
+redo.
+.TP
+.BI \-\-parallel " N"
+Chunks sent to the model at once, 1 to 16. Default 4. The server must run
+them side by side to gain from it; for Ollama, set
+.B OLLAMA_NUM_PARALLEL=4
+in its environment.
+.TP
+.B \-\-no\-tuned
+Use the plain model and the full voice prompt even if the voice has a
+fine-tuned model.
+.TP
+.BI \-\-judge\-model " NAME"
+Model that checks each changed sentence keeps its meaning. Default: the
+base model of a fine-tuned voice, else
+.BR \-\-model .
+A different model costs a model switch per run on a GPU that holds only
+one.
+.TP
+.B \-\-no\-review
+Keep each rewritten chunk whole, as checked by the chunk checks alone,
+instead of reviewing it sentence by sentence.
+.TP
+.B \-\-every\-sentence
+Rewrite every sentence, not only those that need work.
 .TP
 .B \-\-json\-diagnostics
 Write a JSON run report to standard error.
 .TP
 .B \-\-verbose
 List every warning, one per chunk or paragraph. By default warnings are
-summarized in at most two lines: text kept as written, and style rules not
-fully met, each with a count per reason.
+summarized in at most three lines: chunks kept as written, sentences whose
+original wording was kept, and style rules not fully met, each with a count
+per reason.
 .TP
 .BI \-\-output " FILE\fR, " \-o " FILE"
 Write the result to
@@ -188,7 +302,8 @@ Ignore the settings file.
 .B \-\-no\-progress
 Hide the progress line. By default, when standard error is a terminal,
 an animated line shows how many chunks or paragraphs are done, the
-elapsed time and an estimate of the time left.
+elapsed time and an estimate of the time left, and a successful run
+ends by printing the total time taken.
 .SH ENVIRONMENT
 .TP
 .B PROSELIGN_BACKEND\fR, \fBPROSELIGN_ENDPOINT\fR, \fBPROSELIGN_MODEL
@@ -218,14 +333,18 @@ sets
 .BR strict ,
 .BR progress ,
 .BR keep_title_page ,
-.B examples
+.BR review ,
+.BR every_sentence ,
+.BR examples ,
+.B candidates
 and
-.BR candidates ;
+.BR parallel ;
 .B [backend]
 sets
 .BR backend ,
 .BR endpoint ,
-.B model
+.BR model ,
+.B judge_model
 and
 .BR offline ;
 .B [style]
@@ -274,6 +393,8 @@ proselign train \-\-voice Bryan ~/Documents/Writing/
 cat draft.md | proselign \-\-voice Bryan > final.md
 proselign \-\-voice Bryan \-\-strict \-\-strength 0.3 < memo.txt
 proselign \-\-voice Bryan report.docx \-o report\-new.docx
+proselign train \-\-voice BryanMail \-\-min\-words 150 Sent.mbox
+proselign tune \-\-voice Bryan \-\-model qwen2.5:14b\-instruct
 llama\-server \-m model.gguf \-\-port 8080 &
 .fi
 .SH SEE ALSO

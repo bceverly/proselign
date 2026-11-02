@@ -333,8 +333,9 @@ def test_pdf_without_catalog():
 
 def test_pdf_reference_loops_are_bounded():
     doc = Document(b"%PDF-1.4\n1 0 obj 1 0 R endobj")
+    ref = Ref(1)
     with pytest.raises(ExtractError, match="too long"):
-        doc.resolve(Ref(1))
+        doc.resolve(ref)
 
 
 # --- PDF text -------------------------------------------------------------------

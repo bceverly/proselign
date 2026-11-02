@@ -114,7 +114,16 @@ def test_offline_rejects_remote_endpoint(trained):
 
 def test_unreachable_backend_is_backend_error(trained):
     code, out, err = run(
-        ["--voice", "Bryan", "--endpoint", "http://127.0.0.1:9/v1", "--offline"], "Hi.\n", trained
+        [
+            "--voice",
+            "Bryan",
+            "--endpoint",
+            "http://127.0.0.1:9/v1",
+            "--offline",
+            "--every-sentence",
+        ],
+        "Hi.\n",
+        trained,
     )
     assert code == EXIT_BACKEND
     assert out == ""
@@ -126,7 +135,9 @@ def test_strict_failure_exits_validation(trained, monkeypatch):
 
     monkeypatch.setattr(MockBackend, "rewrite", lambda self, m, t: "numbers vanished")
     code, out, err = run(
-        ["--voice", "Bryan", "--backend", "mock", "--strict"], "We had 42 cats.\n", trained
+        ["--voice", "Bryan", "--backend", "mock", "--strict", "--every-sentence"],
+        "We had 42 cats.\n",
+        trained,
     )
     assert code == EXIT_VALIDATION
     assert out == ""
@@ -217,4 +228,5 @@ def test_markdown_file_to_markdown_output(trained, tmp_path: Path):
     assert (code, stdout) == (0, ""), err
     assert out.read_text("utf-8") == source.read_text("utf-8")
     code, _, err = run(argv[:-1] + [str(source)], registry=trained)
-    assert code == 2 and "must not be an input file" in err
+    assert code == 2
+    assert "must not be an input file" in err

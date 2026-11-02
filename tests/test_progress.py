@@ -93,11 +93,27 @@ def test_animation_draws_and_erases(monkeypatch):
     idle.close()
 
 
+def test_finish_reports_the_total_time():
+    clock = Ticker()
+    screen = Terminal()
+    progress = Progress(screen, clock)
+    progress.begin(2, "chunks")
+    clock.now += 125
+    progress.begin(1, "pieces")  # a restart does not reset the total
+    progress.finish()
+    assert screen.getvalue().endswith("proselign: finished in 2:05\n")
+    idle = Progress(Terminal())
+    idle.begin(0, "chunks")
+    idle.finish()  # never shown, so nothing to report
+    assert idle.stream.getvalue() == ""
+
+
 def test_no_progress_is_silent():
     quiet = NoProgress()
     quiet.begin(5, "x")
     quiet.advance()
     quiet.close()
+    quiet.finish()
 
 
 def _rewrite(trained, argv, monkeypatch):
@@ -126,3 +142,4 @@ def test_cli_progress_switches(trained, monkeypatch, argv, rc, shown):
     code, out, err = _rewrite(trained, argv, monkeypatch)
     assert (code, out) == (EXIT_OK, "One paragraph.\n\nAnother one.\n")
     assert ("\r\x1b[K" in err) is shown
+    assert ("proselign: finished in 0:00" in err) is shown

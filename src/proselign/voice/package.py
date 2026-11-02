@@ -39,6 +39,7 @@ def export_voice(
         data["sources"] = []
     if not voice.license_and_consent.get("raw_examples_exportable"):
         data["examples"] = []  # the author's own words stay on this machine
+    data["tuned"] = {}  # a fine-tuned model lives on this machine's model server
     payload = (json.dumps(data, indent=2) + "\n").encode("utf-8")
 
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)

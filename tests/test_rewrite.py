@@ -5,6 +5,10 @@
 
 from __future__ import annotations
 
+import re
+import threading
+import time
+
 import pytest
 
 from proselign.errors import UsageError, ValidationError
@@ -219,14 +223,14 @@ def test_foreign_script_is_caught():
 
 def test_language_drift_is_translated_on_the_fly():
     backend = ScriptedBackend(
-        ["We keep 42 for\u8ffd\u6eaf\u5386\u53f2.", "We keep 42 for tracing history."]
+        ["We keep 42 for tracing\u5386\u53f2.", "We keep 42 for tracing history."]
     )
     rewriter = Rewriter(VOICE, backend, Options())
-    assert rewriter.rewrite("Keep 42 to trace history.") == "We keep 42 for tracing history."
+    assert rewriter.rewrite("We hold 42 to trace history.") == "We keep 42 for tracing history."
     assert rewriter.report.language_fixes == 1
     fix = backend.prompts[1]
     assert "slipped into another language" in fix[0].content
-    assert extract_input(fix[1].content) == "We keep 42 for\u8ffd\u6eaf\u5386\u53f2."
+    assert extract_input(fix[1].content) == "We keep 42 for tracing\u5386\u53f2."
 
 
 def test_failed_language_fix_falls_back_to_a_normal_retry():
@@ -241,7 +245,8 @@ def test_drift_alongside_lost_tokens_skips_the_fix():
     backend = ScriptedBackend(["No number\u5386.", "Keep 42."])
     rewriter = Rewriter(VOICE, backend, Options())
     assert rewriter.rewrite("Keep 42.") == "Keep 42."
-    assert len(backend.prompts) == 2 and "DATA" in backend.prompts[1][0].content
+    assert len(backend.prompts) == 2
+    assert "DATA" in backend.prompts[1][0].content
 
 
 def test_report_summary_groups_problems_by_kind():
@@ -264,13 +269,254 @@ def test_cli_prints_a_summary_unless_verbose(trained, monkeypatch, verbose):
     from proselign.inference import mock  # pylint: disable=import-outside-toplevel
 
     monkeypatch.setattr(mock.MockBackend, "rewrite", lambda self, m, t: "Lost the figure.")
-    argv = ["--voice", "Bryan", "--backend", "mock"] + (["--verbose"] if verbose else [])
-    code, out, err = run(argv, "We have 42.\n\nAnd 7 more.\n", registry=trained)
-    assert code == 0 and out == "We have 42.\n\nAnd 7 more.\n"
+    argv = ["--voice", "Bryan", "--backend", "mock", "--no-review"]
+    argv += ["--verbose"] if verbose else []
+    source = "We have 42 of them left now.\n\nAnd 7 more are on the way.\n"
+    code, out, err = run(argv, source, registry=trained)
+    assert code == 0
+    assert out == source
     if verbose:
-        assert "kept original text for one chunk: number '42'" in err
+        assert "kept original text for one passage: number '42'" in err
         assert "--verbose" not in err
     else:
-        assert "kept the original text of 1 chunk: number changed (1)" in err
+        assert "kept the original text of 2 passages: number changed (2)" in err
         assert "'42'" not in err
         assert "run with --verbose for details" in err
+
+
+class LosesNumbersInBulk(Backend):
+    """Rewrites 'big' as 'large', but drops the placeholders (the masked
+    facts) from any multi-line input: a model that loses facts in a long
+    chunk and keeps them in a short one."""
+
+    def __init__(self) -> None:
+        self.inputs: list[str] = []
+
+    def rewrite(self, messages, temperature):
+        text = extract_input(messages[-1].content)
+        self.inputs.append(text)
+        if "\n" in text:
+            text = re.sub(r"\{\{\d+\}\}", "", text)
+        return text.replace("big", "large")
+
+
+def test_a_failed_chunk_is_retried_paragraph_by_paragraph():
+    source = "We had a big win in 2011.\n\nThen another big step in 2011.\n\nAlex,\n"
+    backend = LosesNumbersInBulk()
+    rewriter = Rewriter(VOICE, backend)
+    assert rewriter.rewrite(source) == (
+        "We had a large win in 2011.\n\nThen another large step in 2011.\n\nAlex,\n"
+    )
+    assert not rewriter.report.fallbacks
+    # One try of the whole chunk (no repairs: splitting works better), then each
+    # paragraph; the greeting alone is too short to send.
+    assert backend.inputs[1:] == ["We had a big win in {{1}}.", "Then another big step in {{1}}."]
+
+
+def test_a_failed_list_is_retried_item_by_item_keeping_its_markers():
+    source = (
+        "WHAT WE FOUND IN THE FILES\n- a big gap in the record in 2011\n"
+        "2. a big rise in the count in 2011\n"
+    )
+    backend = LosesNumbersInBulk()
+    rewriter = Rewriter(VOICE, backend, Options(max_repairs=0))
+    assert rewriter.rewrite(source) == (
+        "WHAT WE FOUND IN THE FILES\n- a large gap in the record in 2011\n"
+        "2. a large rise in the count in 2011\n"
+    )
+    assert "a big gap in the record in {{1}}" in backend.inputs  # the marker is not sent
+    assert not any(text.startswith("WHAT") for text in backend.inputs[1:])  # nor the heading
+
+
+def test_a_single_paragraph_that_fails_is_kept():
+    source = "A big win for the team\nin 2011, wrapped.\n"
+    rewriter = Rewriter(VOICE, LosesNumbersInBulk(), Options(max_repairs=0))
+    assert rewriter.rewrite(source) == source
+    assert rewriter.report.fallbacks == 1
+
+
+def test_email_headers_are_never_rewritten():
+    segments = segment("To: Alex\nCc: Jeff\nSubject: the plan\n\nAlex,\n")
+    assert not segments[0].prose
+    assert segments[-1].prose
+
+
+def test_identifiers_and_length_are_checked():
+    assert protect.missing("See (INDIV_DEF_00005121).", "See it.") == [
+        "identifier 'INDIV_DEF_00005121' appears 1x in the source but 0x after"
+    ]
+    assert protect.length_change("Alex,", "Wifi was down for most of the flight, so we could not")
+    long = " ".join(["word"] * 30)
+    assert protect.length_change(long, "word word")
+    assert not protect.length_change(long, long)
+
+
+def test_protected_spans_are_masked_and_restored():
+    source = 'In 2011 Igor said "we are fine" (INDIV_DEF_00004939). [[2]] See <s1>it</s1>.'
+    masked, spans = protect.mask(source)
+    assert masked == "In {{1}} Igor said {{2}} ({{3}}). [[2]] See <s1>it</s1>."
+    assert spans == ["2011", '"we are fine"', "INDIV_DEF_00004939"]
+    assert protect.unmask(masked, spans) == (source, [])
+    restored, problems = protect.unmask("{{1}} {{1}} {{2}} {{3}} {{9}}", spans)
+    assert problems == [
+        "placeholder {{1}} appears 2x; keep each placeholder exactly once, where its "
+        "words belong",
+        "placeholder {{9}} is not in the original; remove it",
+    ]
+    assert restored.endswith("INDIV_DEF_00004939 ")
+    assert protect.mask("Literal {{1}} braces, 2011.") == ("Literal {{1}} braces, 2011.", [])
+
+
+def test_the_model_is_told_about_placeholders():
+    backend = ScriptedBackend(["We met in {{1}}, as planned."])
+    assert Rewriter(VOICE, backend).rewrite("We met in 2011.") == "We met in 2011, as planned."
+    assert "The input has 1 placeholders" in backend.prompts[0][1].content
+
+
+def test_names_must_not_be_added_or_dropped():
+    source = "It was aimed at Korotkoff, made while he was at Rambler."
+    assert protect.name_changes(
+        source, "It was aimed at Korotkoff, while Korotkoff was at Rambler."
+    )
+    assert protect.name_changes(source, "It was aimed at him while he was at Rambler.")
+    assert not protect.name_changes(
+        source, "Aimed at Korotkoff, it was made while he was at Rambler."
+    )
+
+
+def test_quote_marks_and_commas_the_model_adds_around_a_quotation_are_dropped():
+    spans = ['"We see no problem in this,"', '"F5_0061654,"']
+    assert protect.unmask('It said "{{1}}" and read {{2}}, which', spans) == (
+        'It said "We see no problem in this," and read "F5_0061654," which',
+        [],
+    )
+    spans = ['"JUST ACCEPT THIS RISK."', '"around nginx?"', '"an important condition,"']
+    assert protect.unmask("He said {{1}}. She asked {{2}}. It was {{3}}.", spans) == (
+        'He said "JUST ACCEPT THIS RISK." She asked "around nginx?" '
+        'It was "an important condition,".',
+        [],
+    )
+
+
+def test_the_author_and_the_reader_stay_who_they_were():
+    assert protect.person_changes(
+        "while the Series A was being negotiated", "while we negotiated the Series A"
+    )
+    assert protect.person_changes("Your picks are clear.", "These picks are clear.")
+    assert not protect.person_changes("I think so.", "We think so.")
+    assert not protect.person_changes("The US patents.", "The two US patents.")
+    rewriter = Rewriter(VOICE, ScriptedBackend(["We negotiated it."]), Options(max_repairs=0))
+    assert rewriter.rewrite("It was negotiated.") == "It was negotiated."
+    relaxed = Options(max_repairs=0, keep_person=False)
+    assert Rewriter(VOICE, ScriptedBackend(["We did it."]), relaxed).rewrite("It was done.") == (
+        "We did it."
+    )
+
+
+def test_paragraph_breaks_the_model_adds_are_removed():
+    source = "Notes on the plan for this week:\n- first item here\n- second item here"
+    backend = ScriptedBackend(
+        ["Notes on the plan this week:\n\n- first item here\n\n- second item here"]
+    )
+    assert Rewriter(VOICE, backend).rewrite(source) == (
+        "Notes on the plan this week:\n- first item here\n- second item here"
+    )
+    intro = "Your picks have a shape:\n\n1. Period. One thing here.\n2. Outsiders. Another."
+    spaced = ScriptedBackend([intro.replace("\n2.", "\n\n2.")])
+    assert Rewriter(VOICE, spaced).rewrite(intro) == intro
+    split = ScriptedBackend(["We ship on time.\n\nThen we rest for a while."])
+    assert Rewriter(VOICE, split).rewrite("We ship on time and then we rest a while.") == (
+        "We ship on time. Then we rest for a while."
+    )
+
+
+def test_invented_figures_are_caught():
+    assert protect.missing("It took five more months.", "It took 5 more months.")
+    assert not protect.missing("It took 5 more months.", "It took 5 months more.")
+
+
+def test_negations_and_modal_verbs_must_survive():
+    assert not protect.claim_changes("We can't say it will.", "We cannot say that it will.")
+    assert not protect.claim_changes("It won't do.", "It will not do.")
+    softened = protect.claim_changes(
+        "Expect it in a laches argument.", "It could be used in a laches argument."
+    )
+    assert softened and "'could'" in softened[0]
+    dropped = protect.claim_changes("The author is not shown.", "The author is shown.")
+    assert dropped and "negations" in dropped[0]
+
+
+def test_dropped_and_invented_sentences_are_caught():
+    source = "Sysoev denied it. The author is not shown."
+    assert not protect.sentence_changes(source, "Sysoev denied that. The author isn't shown.")
+    dropped = protect.sentence_changes(source, "Sysoev denied it.")
+    assert dropped and dropped[0].startswith("the rewrite drops the sentence 'The author")
+    invented = protect.sentence_changes(source, source + " All of it points to one thing.")
+    assert invented and invented[0].startswith("the rewrite adds the sentence")
+
+
+def test_acronyms_count_as_names():
+    assert protect.name_changes("The company cited MSD.", "MSD Capital cited MSD.")
+    assert not protect.name_changes(
+        "The IP sits with the BVI company.", "The IP is with the BVI firm."
+    )
+
+
+def test_list_labels_are_masked():
+    masked, spans = protect.mask("1. Period. Your list is short.\n- Outsiders. Much of it.")
+    assert spans == ["1", "Period.", "Outsiders."]
+    assert masked == "{{1}}. {{2}} Your list is short.\n- {{3}} Much of it."
+    assert protect.missing("Period. Your list.", "Your list.")
+
+
+def test_plain_text_headings_stay_as_written():
+    text = (
+        "5. Intercompany paper and where the IP sits\n- The memo is cited.\n\n"
+        "WHAT WE FOUND\n- a gap\n- a rise\n\n2. a rise in 2011\n3. a fall in 2012\n"
+    )
+    verbatim = [seg.text for seg in segment(text) if not seg.prose and seg.text.strip()]
+    assert verbatim == ["5. Intercompany paper and where the IP sits\n", "WHAT WE FOUND\n"]
+
+
+class Recording(Backend):
+    """Echoes its input, slowly, noting how many requests overlap (in state
+    its copies share, as each parallel worker gets a copy)."""
+
+    def __init__(self) -> None:
+        self.state = {"active": 0, "most": 0}
+        self.lock = threading.Lock()
+
+    @property
+    def most(self) -> int:
+        return self.state["most"]
+
+    def rewrite(self, messages, temperature):
+        with self.lock:
+            self.state["active"] += 1
+            self.state["most"] = max(self.state["most"], self.state["active"])
+        time.sleep(0.02)
+        with self.lock:
+            self.state["active"] -= 1
+        return extract_input(messages[-1].content).replace("big", "large")
+
+
+def test_chunks_are_rewritten_in_parallel_in_order():
+    sentence = "Paragraph {} has a big point to make about the record, and it makes it well. "
+    source = "\n\n".join((sentence * 2).format(n, n).strip() for n in range(8)) + "\n"
+    backend = Recording()
+    rewriter = Rewriter(VOICE, backend, Options(max_chunk_tokens=64, parallel=4))
+    assert rewriter.rewrite(source) == source.replace("big", "large")
+    assert backend.most > 1
+    assert rewriter.report.chunks == 8
+    serial = Recording()
+    assert Rewriter(VOICE, serial, Options(max_chunk_tokens=64, parallel=1)).rewrite(source)
+    assert serial.most == 1
+    for bad in (0, 17):
+        with pytest.raises(UsageError):
+            Options(parallel=bad)
+
+
+def test_parallel_reports_merge_in_order():
+    report, other = Report(chunks=1, warnings=["a"]), Report(chunks=2, fallbacks=1, warnings=["b"])
+    report.merge(other)
+    assert (report.chunks, report.fallbacks, report.warnings) == (3, 1, ["a", "b"])

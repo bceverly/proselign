@@ -39,7 +39,8 @@ _PARTS = re.compile(r"word/(?:document|footnotes|endnotes)\d*\.xml")
 _TOKEN = re.compile(r"<!--.*?-->|<\?.*?\?>|<!\[CDATA\[.*?\]\]>|<![^>]*>|<[^>]+>|[^<]+", re.DOTALL)
 _TAG_NAME = re.compile(r"</?([^\s/>]+)")
 _SKIP_STYLES = re.compile(r'w:pStyle w:val="(?:Heading|Title|Subtitle|TOC|Caption)', re.I)
-_PARAGRAPH_CHILDREN = frozenset({"w:pPr", "w:r", "w:proofErr", "w:bookmarkStart", "w:bookmarkEnd"})
+_PPR = "w:pPr"
+_PARAGRAPH_CHILDREN = frozenset({_PPR, "w:r", "w:proofErr", "w:bookmarkStart", "w:bookmarkEnd"})
 _RUN_CHILDREN = frozenset({"w:rPr", "w:t", "w:lastRenderedPageBreak"})
 _STYLE_TAG = re.compile(r"(</?s\d+>)")
 _SENTENCE_END = re.compile(r"[.!?][\"'\u201d\u2019)\]]*\s*\Z")
@@ -199,22 +200,30 @@ def _first_page_end(tokens: list[str], ends: list[int]) -> int:
                 return 0
             continue
         closing = token.startswith("</")
-        boundary = None
         if name == "w:p" and not closing:
             paragraph = i
-        elif name == "w:pPr" and not token.endswith("/>"):
+        elif name == _PPR and not token.endswith("/>"):
             in_ppr = not closing
-        elif name == "w:br" and 'w:type="page"' in token:
-            boundary = i
-        elif name == "w:lastRenderedPageBreak" or (
-            name == "w:pageBreakBefore" and not _OFF.search(token)
-        ):
-            boundary = paragraph  # this paragraph starts the next page
-        elif name == "w:sectPr" and in_ppr and not closing:
-            boundary = ends[paragraph] + 1
+        boundary = _page_boundary(token, name, i, paragraph, ends[paragraph] + 1, in_ppr)
         if boundary is not None:
             return boundary if words else 0
     return 0
+
+
+def _page_boundary(
+    token: str, name: str, at: int, paragraph: int, after: int, in_ppr: bool
+) -> int | None:
+    """Where the first page ends if ``token`` (at index ``at``, inside the
+    paragraph starting at ``paragraph`` and ending before ``after``) ends it."""
+    if name == "w:br" and 'w:type="page"' in token:
+        return at
+    if name == "w:lastRenderedPageBreak" or (
+        name == "w:pageBreakBefore" and not _OFF.search(token)
+    ):
+        return paragraph  # this paragraph starts the next page
+    if name == "w:sectPr" and in_ppr and not token.startswith("</"):
+        return after
+    return None
 
 
 def _name(token: str) -> str:
@@ -286,20 +295,10 @@ def _structure(tokens, ends, start) -> tuple[list[str], list[tuple[str, str, str
     for first, last in _children(tokens, ends, start):
         name = _name(tokens[first])
         xml = "".join(tokens[first : last + 1])
-        if not name and xml.strip():
-            raise _Ineligible("unusual content")
-        if name and name not in _PARAGRAPH_CHILDREN:
-            raise _Ineligible("fields, links, images or tracked changes")
-        if name == "w:pPr" and _SKIP_STYLES.search(xml):
-            raise _Ineligible("headings and captions")
+        _check_child(name, xml)
         if name == "w:r":
             run = _run(tokens, ends, first)
-            if run is None:
-                raise _Ineligible("tabs, breaks or embedded objects")
-            if run[3]:  # ends with a tab
-                # Only a leading "1.<tab>" or "\u2022<tab>" run is allowed; it is kept as is.
-                if runs or keep_marker or not _LIST_MARKER.fullmatch(run[2].strip()):
-                    raise _Ineligible("tabs, breaks or embedded objects")
+            if _list_marker(run, bool(runs) or keep_marker):
                 keep_marker = True
                 keep.append(xml)
                 continue
@@ -308,6 +307,29 @@ def _structure(tokens, ends, start) -> tuple[list[str], list[tuple[str, str, str
         elif name != "w:proofErr":
             keep.append(xml)
     return keep, runs, run_at
+
+
+def _check_child(name: str, xml: str) -> None:
+    """Refuse a paragraph child that a rewrite could damage."""
+    if not name and xml.strip():
+        raise _Ineligible("unusual content")
+    if name and name not in _PARAGRAPH_CHILDREN:
+        raise _Ineligible("fields, links, images or tracked changes")
+    if name == _PPR and _SKIP_STYLES.search(xml):
+        raise _Ineligible("headings and captions")
+
+
+def _list_marker(run: tuple[str, str, str, bool] | None, after_text: bool) -> bool:
+    """Whether ``run`` is a typed list marker, kept as it is; refuse other
+    tabs, breaks and objects."""
+    if run is None:
+        raise _Ineligible("tabs, breaks or embedded objects")
+    if not run[3]:  # no tab at the end: ordinary text
+        return False
+    # Only a leading "1.<tab>" or "\u2022<tab>" run is allowed.
+    if after_text or not _LIST_MARKER.fullmatch(run[2].strip()):
+        raise _Ineligible("tabs, breaks or embedded objects")
+    return True
 
 
 def _skip(report: DocxReport, reason: str) -> None:
@@ -364,17 +386,25 @@ def _runs(paragraph: _Paragraph, text: str) -> str | None:
     for piece in _STYLE_TAG.split(text):
         tag = re.fullmatch(r"<(/?)s(\d+)>", piece)
         if tag:
-            number = int(tag.group(2))
-            closing = tag.group(1) == "/"
-            if number == 0 or number >= len(paragraph.styles):
+            current = _next_style(tag, current, len(paragraph.styles))
+            if current is None:
                 return None
-            if closing != (current == number) or (not closing and current):
-                return None
-            current = 0 if closing else number
         elif piece:
             start_tag, rpr = paragraph.styles[current]
             out.append(f'{start_tag}{rpr}<w:t xml:space="preserve">{_escape(piece)}</w:t></w:r>')
     return None if current or not out else "".join(out)
+
+
+def _next_style(tag: re.Match, current: int, count: int) -> int | None:
+    """The style in force after ``tag``, or None when the tag doesn't fit:
+    an unknown style, a stray close, or spans nested inside each other."""
+    number = int(tag.group(2))
+    closing = tag.group(1) == "/"
+    if number == 0 or number >= count:
+        return None
+    if closing != (current == number) or (not closing and current):
+        return None
+    return 0 if closing else number
 
 
 def _unescape(text: str) -> str:

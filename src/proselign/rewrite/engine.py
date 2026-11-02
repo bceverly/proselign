@@ -5,31 +5,62 @@
 
 Verbatim segments (fenced code, tables, HTML blocks, front matter) never
 reach the model at all, which is the strongest preservation guarantee there
-is. Prose is grouped into token-bounded chunks at paragraph boundaries.
+is. Prose is grouped into small token-bounded chunks at paragraph boundaries,
+and several chunks are rewritten at once (``Options.parallel``): a model
+server that batches requests gets through them far faster than one by one.
+With ``Options.review``, every rewrite is then checked sentence by sentence
+(:mod:`proselign.rewrite.review`) and only the changes that pass are kept.
 """
 
 from __future__ import annotations
 
+import copy
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from proselign.errors import UsageError, ValidationError
 from proselign.inference.base import Backend
 from proselign.progress import NoProgress
-from proselign.rewrite import protect, scoring, style
+from proselign.rewrite import protect, review, scoring, style
 from proselign.rewrite.exemplars import Library
-from proselign.rewrite.prompt import build_language_fix, build_messages
+from proselign.rewrite.prompt import build_language_fix, build_messages, build_tuned_messages
 from proselign.rewrite.style import StyleRules
 from proselign.voice.profile import Voice
 
 MAX_CHUNK_TOKENS = 1_000_000
 MAX_CANDIDATES = 5
 MAX_EXAMPLES = 8
+MAX_PARALLEL = 16
+# About a paragraph or two: a chunk this small fits a 4,096-token context
+# with the instructions and the reply, and a failed one costs little to redo.
+CHUNK_TOKENS = 400
+# Parts of the voice that can be left out of a rewrite, to measure what each
+# one contributes (``proselign eval --ablate``): the instruction groups, the
+# tone line, the author's example passages, and the feedback that steers a
+# first attempt back toward the profile.
+PROMPT_PARTS = (*style.DIRECTIVE_GROUPS, "tone", "examples", "steering")
 
 _FENCE_OPEN_RE = re.compile(r"^(\s{0,3})(`{3,}|~{3,})")
 _ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
 _SETEXT_UNDERLINE_RE = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
 _UNIT_MARK_RE = re.compile(r"\[\[(\d+)\]\]")
+# Pieces of a failed chunk shorter than this are kept: alone, a model has
+# nothing to restyle in them and fills the reply with invented text.
+MIN_PIECE_WORDS = 6
+_BLANK_LINES_RE = re.compile(r"(\n[ \t]*\n\s*)")
+_HEADER_LINE_RE = re.compile(
+    r"^(?:to|cc|bcc|from|reply-to|date|subject|sent|re|fwd?):[ \t]", re.IGNORECASE
+)
+_LIST_ITEM_RE = re.compile(r"^[ \t]*(?:[-*+]|\d{1,3}[.)])[ \t]+")
+# A line that ends without punctuation and opens a paragraph or a list is a
+# heading ("5. Intercompany paper and where the IP sits"); it stays as written.
+MAX_HEADING_WORDS = 20
+_UNPUNCTUATED_END_RE = re.compile(r"[\w%]\Z")
+# A list item after a blank line; group 1 is its marker.
+_SPACED_ITEM_RE = re.compile(r"\n[ \t]*\n\s*([ \t]*(?:[-*+]|\d{1,3}[.)])[ \t]+)")
+_BULLET_RE = re.compile(r"^[ \t]*[-*+][ \t]+")
+_NUMBERED_RE = re.compile(r"^[ \t]*\d{1,3}[.)][ \t]+")
 
 
 @dataclass
@@ -41,17 +72,34 @@ class Segment:
 
 
 @dataclass
-class Options:
+class Options:  # pylint: disable=too-many-instance-attributes  # one per knob
     """Knobs for one rewrite run."""
 
     strength: float = 0.5
     strict: bool = False
-    max_chunk_tokens: int = 1500
-    max_repairs: int = 2
+    max_chunk_tokens: int = CHUNK_TOKENS
+    max_repairs: int = 1
     text_format: str = "markdown"
     rules: StyleRules = field(default_factory=StyleRules)
     candidates: int = 1  # rewrites generated per attempt; the closest to the voice wins
     examples: int = 3  # passages of the author's writing shown per chunk
+    omit: frozenset[str] = frozenset()  # parts of the voice left out (PROMPT_PARTS)
+    # Reject rewrites that use I/we more, or you differently, than the source;
+    # off only for ``proselign eval``, whose neutral texts lost them on purpose.
+    keep_person: bool = True
+    # Reject rewrites that change a negation or modal verb, or drop or add a
+    # sentence; off only for ``proselign eval``, which measures style alone.
+    keep_meaning: bool = True
+    parallel: int = 4  # chunks rewritten at once
+    # The model was fine-tuned on this voice (``proselign tune``): it gets the
+    # short tuned prompt, without profile, examples or steering.
+    tuned: bool = False
+    # Check each changed sentence on its own and keep the original of any
+    # that fails (the CLI turns this on; see proselign.rewrite.review).
+    review: bool = False
+    # Change only the sentences that need work (review.needs_work): the rest
+    # are left exactly as written.  Needs ``review``.
+    targeted: bool = False
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.strength <= 1.0:
@@ -64,6 +112,11 @@ class Options:
             raise UsageError(f"--candidates must be between 1 and {MAX_CANDIDATES}")
         if not 0 <= self.examples <= MAX_EXAMPLES:
             raise UsageError(f"--examples must be between 0 and {MAX_EXAMPLES}")
+        if not 1 <= self.parallel <= MAX_PARALLEL:
+            raise UsageError(f"--parallel must be between 1 and {MAX_PARALLEL}")
+        unknown = set(self.omit) - set(PROMPT_PARTS)
+        if unknown:
+            raise UsageError(f"unknown part(s) of a voice: {', '.join(sorted(unknown))}")
 
 
 @dataclass
@@ -75,17 +128,33 @@ class Report:
     fallbacks: int = 0
     language_fixes: int = 0
     warnings: list[str] = field(default_factory=list)
-    unit: str = "chunk"
+    unit: str = "passage"
     kept_problems: list[list[str]] = field(default_factory=list)
     style_problems: list[list[str]] = field(default_factory=list)
+    reverted: list[list[str]] = field(default_factory=list)  # sentences kept by the review
+    untouched: int = 0  # chunks with nothing that needed work
+
+    def merge(self, other: Report) -> None:
+        """Add ``other``'s counts and findings (a parallel worker's) to these."""
+        self.chunks += other.chunks
+        self.repaired += other.repaired
+        self.fallbacks += other.fallbacks
+        self.language_fixes += other.language_fixes
+        self.warnings += other.warnings
+        self.kept_problems += other.kept_problems
+        self.style_problems += other.style_problems
+        self.reverted += other.reverted
+        self.untouched += other.untouched
 
     def summary(self) -> list[str]:
-        """At most two lines: what was kept as written, and why; which style
-        rules were not fully met.  ``warnings`` holds every detail."""
+        """At most three lines: what was kept as written, and why; which
+        sentences kept their original wording, and why; which style rules
+        were not fully met.  ``warnings`` holds every detail."""
         lines = []
-        for what, groups in (
-            ("kept the original text of", self.kept_problems),
-            ("style rules not fully met in", self.style_problems),
+        for what, groups, unit in (
+            ("kept the original text of", self.kept_problems, self.unit),
+            ("kept the original wording of", self.reverted, "sentence"),
+            ("style rules not fully met in", self.style_problems, self.unit),
         ):
             if groups:
                 counts: dict[str, int] = {}
@@ -93,7 +162,7 @@ class Report:
                     for category in dict.fromkeys(_category(p) for p in problems):
                         counts[category] = counts.get(category, 0) + 1
                 reasons = ", ".join(f"{name} ({count})" for name, count in counts.items())
-                plural = self.unit if len(groups) == 1 else f"{self.unit}s"
+                plural = unit if len(groups) == 1 else f"{unit}s"
                 lines.append(f"{what} {len(groups)} {plural}: {reasons}")
         return lines
 
@@ -110,7 +179,25 @@ def _is_verbatim_block(block: str) -> bool:
         return True  # indented code
     if len(lines) == 2 and _SETEXT_UNDERLINE_RE.match(lines[1]):
         return True  # setext heading (Title / =====)
+    if lines and all(_HEADER_LINE_RE.match(ln) for ln in lines):
+        return True  # e-mail headers (To:, Cc:, Subject:)
     return False
+
+
+def _is_heading_line(lines: list[str], i: int) -> bool:
+    """Whether ``lines[i]``, the first line of a block, is a plain-text heading:
+    short, unpunctuated, not a bullet, and alone or followed by a list of
+    another kind (a numbered heading over bullets)."""
+    line = lines[i].strip()
+    if not line or not _UNPUNCTUATED_END_RE.search(line) or _BULLET_RE.match(line):
+        return False
+    if len(line.split()) > MAX_HEADING_WORDS:
+        return False
+    following = lines[i + 1] if i + 1 < len(lines) else ""
+    if not following.strip():
+        return True
+    numbered = _NUMBERED_RE.match(line)
+    return bool(_BULLET_RE.match(following) if numbered else _LIST_ITEM_RE.match(following))
 
 
 def _front_matter_lines(lines: list[str]) -> int:
@@ -159,12 +246,11 @@ def segment(text: str, text_format: str = "markdown") -> list[Segment]:
             segments.append(Segment("".join(lines[i:end]), False))
             i = end
             continue
-        if _ATX_HEADING_RE.match(line):
-            flush()
-            segments.append(Segment(line, False))  # headings stay as written
-        elif line.strip():
+        if not block and _is_heading_line(lines, i):
+            segments.append(Segment(line, False))
+        elif line.strip() and not _ATX_HEADING_RE.match(line):
             block.append(line)
-        else:
+        else:  # blank lines, and headings, which stay as written
             flush()
             segments.append(Segment(line, False))
         i += 1
@@ -184,10 +270,20 @@ def _split_edges(text: str) -> tuple[str, str, str]:
 class Rewriter:
     """Applies one voice to text through one backend."""
 
-    def __init__(self, voice: Voice, backend: Backend, options: Options | None = None) -> None:
+    def __init__(
+        self,
+        voice: Voice,
+        backend: Backend,
+        options: Options | None = None,
+        judge: Backend | None = None,
+    ) -> None:
         self.voice = voice
         self.backend = backend
         self.options = options or Options()
+        # The model asked whether each change keeps the meaning (with
+        # ``Options.review``); without one, only the rule checks apply.
+        self.judge = judge
+        self._rejected: str | None = None  # the last attempt's failed rewrite
         self.report = Report()
         self.progress = NoProgress()  # the CLI swaps in a visible one
         self._library: Library | None = None
@@ -200,9 +296,20 @@ class Rewriter:
         if not core:
             return source
         self.report.chunks += 1
-        result, problems = self._attempt(core)
+        if self._fits(core):
+            return source
+        pieces = _pieces(core)
+        result, problems = self._attempt(core, splittable=bool(pieces) and not self.options.review)
         if result is not None:
             return lead + result + trail
+        if self.options.review and self._rejected:
+            # The review keeps the sentences of it that pass, and the
+            # original of the rest.
+            return lead + self._rejected + trail
+        if pieces:
+            # One dropped number anywhere fails a whole chunk; retry it piece
+            # by piece, so only the pieces that still fail are kept as written.
+            return lead + "".join(self._rewrite_piece(p) for p in pieces) + trail
         detail = _summarize(problems)
         if self.options.strict:
             raise ValidationError(f"rewrite failed fidelity checks: {detail}")
@@ -211,24 +318,31 @@ class Rewriter:
         self.report.warnings.append(f"kept original text for one {self.report.unit}: {detail}")
         return source
 
-    def _attempt(self, core: str) -> tuple[str | None, list[str]]:
-        """The best faithful rewrite of ``core``, or None and the last problems."""
+    def _attempt(self, core: str, splittable: bool = False) -> tuple[str | None, list[str]]:
+        """The best faithful rewrite of ``core``, or None and the last problems.
+        A ``splittable`` text that loses facts is not retried whole: its
+        pieces, rewritten separately, keep them far more reliably."""
         rules = self.options.rules
-        examples = self._examples(core)
+        masked, spans = protect.mask(core)
         feedback: list[str] | None = None
         best: str | None = None  # faithful, but still breaking a style rule
+        self._rejected = None
+        prompt = self._prompt(core, masked)
         for attempt in range(self.options.max_repairs + 1):
-            messages = build_messages(
-                self.voice, core, self.options.strength, feedback, rules, examples
-            )
-            results = [self._candidate(core, messages, k) for k in range(self.options.candidates)]
+            messages = prompt(feedback)
+            results = [
+                self._candidate(core, spans, messages, k) for k in range(self.options.candidates)
+            ]
             faithful = [text for text, problems in results if not problems]
             if not faithful:
-                feedback = results[0][1]
+                self._rejected, feedback = results[0]
+                if splittable:
+                    break
                 continue
             candidate = min(faithful, key=lambda text: scoring.distance(text, self.voice))
             problems = style.violations(core, candidate, rules)
-            if not attempt:  # one nudge toward the profile; it is approximate
+            if not attempt and not self.options.tuned and "steering" not in self.options.omit:
+                # One nudge toward the profile; it is approximate.
                 problems += scoring.drift(candidate, self.voice, self.options.strength)
             if not problems:
                 if attempt:
@@ -237,20 +351,38 @@ class Rewriter:
             best = style.punctuate(candidate, rules)
             feedback = problems
 
+        return self._settle(core, best, feedback)
+
+    def _settle(
+        self, core: str, best: str | None, feedback: list[str] | None
+    ) -> tuple[str | None, list[str]]:
+        """After the last attempt: the faithful rewrite that still breaks a
+        style rule (reported), or None and the last problems."""
         if best is not None and not protect.missing(core, best):
-            remaining = style.violations(core, best, rules)
+            remaining = style.violations(core, best, self.options.rules)
             if remaining:
                 self.report.style_problems.append(remaining)
                 self.report.warnings.append(f"style rules not fully met: {_summarize(remaining)}")
             return best, []
         return None, feedback or []
 
-    def _candidate(self, core: str, messages, variant: int) -> tuple[str, list[str]]:
-        """One cleaned rewrite of ``core`` and its fidelity problems."""
+    def _candidate(
+        self, core: str, spans: list[str], messages, variant: int
+    ) -> tuple[str, list[str]]:
+        """One cleaned rewrite of ``core`` (sent with ``spans`` masked) and
+        its fidelity problems."""
         rules = self.options.rules
         reply = self._reply(messages, variant).strip()
-        candidate = protect.repair_quotations(core, style.clean(core, reply, rules))
-        problems = protect.missing(core, candidate)
+        candidate, problems = protect.unmask(style.clean(core, reply, rules), spans)
+        candidate = _keep_paragraphs(core, candidate)
+        candidate = protect.repair_quotations(core, candidate)
+        problems += protect.missing(core, candidate) + protect.length_change(core, candidate)
+        problems += protect.name_changes(core, candidate)
+        if self.options.keep_meaning:
+            problems += protect.claim_changes(core, candidate)
+            problems += protect.sentence_changes(core, candidate)
+        if self.options.keep_person:
+            problems += protect.person_changes(core, candidate)
         drift = protect.foreign_script(core, candidate)
         if drift and not problems:
             candidate, drift = self._fix_language(core, candidate)
@@ -272,7 +404,12 @@ class Rewriter:
 
     def _examples(self, core: str) -> list[str]:
         """The author's passages to show alongside ``core``."""
-        if not self.options.examples or not self.voice.examples:
+        if (
+            self.options.tuned
+            or not self.options.examples
+            or not self.voice.examples
+            or "examples" in self.options.omit
+        ):
             return []
         if self._library is None:
             self._library = Library(self.voice.examples)
@@ -288,6 +425,16 @@ class Rewriter:
             self.report.language_fixes += 1
             return fixed, []
         return candidate, protect.foreign_script(core, candidate)
+
+    def _rewrite_piece(self, piece: str) -> str:
+        """A piece of a failed chunk: separators and list markers stay as
+        written, and the rest is rewritten on its own."""
+        if len(piece.split()) < MIN_PIECE_WORDS or piece.upper() == piece:
+            return piece  # a greeting, sign-off or heading: nothing to restyle
+        marker = _LIST_ITEM_RE.match(piece)
+        if marker:
+            return marker.group(0) + self._rewrite_chunk(piece[marker.end() :])
+        return self._rewrite_chunk(piece)
 
     def _chunks(self, segments: list[Segment]) -> list[Segment]:
         """Merge adjacent prose (and the blank lines between) up to the token budget."""
@@ -307,6 +454,27 @@ class Rewriter:
                 merged.append(Segment(seg.text, seg.prose))
         return merged
 
+    def _map(self, work, items: list) -> list:
+        """``work(rewriter, item)`` for every item, up to ``parallel`` at a
+        time, results in order.  Each worker has its own copy of the backend
+        (a candidate's sampling seed is set on it) and its own report, which
+        are merged in order, so warnings read the same as a serial run."""
+        if self.options.parallel == 1 or len(items) < 2:
+            return [work(self, item) for item in items]
+        if self.voice.examples and self._library is None:
+            self._library = Library(self.voice.examples)  # shared, read-only
+        workers = []
+        for _ in items:
+            worker = copy.copy(self)
+            worker.backend = copy.copy(self.backend)
+            worker.report = Report(unit=self.report.unit)
+            workers.append(worker)
+        with ThreadPoolExecutor(min(self.options.parallel, len(items))) as pool:
+            results = list(pool.map(work, workers, items))
+        for worker in workers:
+            self.report.merge(worker.report)
+        return results
+
     def rewrite_units(self, units: list[str]) -> list[str]:
         """Rewrite independent paragraphs (of a .docx), returning one result each.
 
@@ -317,23 +485,32 @@ class Rewriter:
         results = list(units)
         self.report.unit = "paragraph"
         self.progress.begin(len(units), "paragraphs")
-        for batch in self._unit_batches(units):
-            parts = None
-            if len(batch) > 1:
-                text = "\n\n".join(f"[[{n}]] {units[i]}" for n, i in enumerate(batch, 1))
-                rewritten, _ = self._attempt(text)
-                parts = None if rewritten is None else _split_units(rewritten, len(batch))
-                self.report.chunks += parts is not None
-            if parts is None:
-                parts = []
-                for i in batch:
-                    parts.append(self._rewrite_chunk(units[i]))
-                    self.progress.advance()
-            else:
-                self.progress.advance(len(batch))
+        batches = self._unit_batches(units)
+        jobs = [[units[i] for i in batch] for batch in batches]
+        for batch, parts in zip(batches, self._map(Rewriter._batch_job, jobs)):
             for i, part in zip(batch, parts):
                 results[i] = part
-        return results
+        return self._review(units, results)
+
+    def _batch_job(self, batch: list[str]) -> list[str]:
+        """One batch of paragraphs, rewritten together or else one by one."""
+        parts = None
+        if self._fits("\n\n".join(batch)):
+            self.progress.advance(len(batch))
+            return list(batch)
+        if len(batch) > 1:
+            text = "\n\n".join(f"[[{n}]] {unit}" for n, unit in enumerate(batch, 1))
+            rewritten, _ = self._attempt(text)
+            parts = None if rewritten is None else _split_units(rewritten, len(batch))
+            self.report.chunks += parts is not None
+        if parts is None:
+            parts = []
+            for unit in batch:
+                parts.append(self._rewrite_chunk(unit))
+                self.progress.advance()
+        else:
+            self.progress.advance(len(batch))
+        return parts
 
     def _unit_batches(self, units: list[str]) -> list[list[int]]:
         batches: list[list[int]] = []
@@ -349,16 +526,140 @@ class Rewriter:
 
     def rewrite(self, text: str) -> str:
         """Rewrite ``text``, returning the full reassembled document."""
-        out = []
         chunks = self._chunks(segment(text, self.options.text_format))
-        self.progress.begin(sum(seg.prose for seg in chunks), "chunks")
-        for seg in chunks:
-            if seg.prose:
-                out.append(self._rewrite_chunk(seg.text))
-                self.progress.advance()
-            else:
-                out.append(seg.text)
-        return "".join(out)
+        prose = [seg.text for seg in chunks if seg.prose]
+        self.progress.begin(len(prose), "chunks")
+        done = iter(self._review(prose, self._map(Rewriter._chunk_job, prose)))
+        return "".join(next(done) if seg.prose else seg.text for seg in chunks)
+
+    def _chunk_job(self, text: str) -> str:
+        result = self._rewrite_chunk(text)
+        self.progress.advance()
+        return result
+
+    def _prompt(self, core: str, masked: str):
+        """``prompt(feedback)``: the messages for an attempt at ``core``."""
+        examples, focus = self._examples(core), self._focus(masked)
+        if self.options.tuned:
+            return lambda feedback: build_tuned_messages(masked, feedback, focus)
+        return lambda feedback: build_messages(
+            self.voice,
+            masked,
+            self.options.strength,
+            feedback,
+            self.options.rules,
+            examples,
+            self.options.omit,
+            focus,
+        )
+
+    def _focus(self, masked: str) -> list[str] | None:
+        """With ``Options.targeted``, the instructions that name the only
+        sentences of ``masked`` to change."""
+        if not self.options.targeted:
+            return None
+        return review.focus(review.flagged(masked, self.voice, self.options.rules)) or None
+
+    def _fits(self, text: str) -> bool:
+        """Whether ``text`` has nothing to change: with ``Options.targeted``,
+        no sentence in it needs work, so the model is not asked at all."""
+        if not self.options.targeted or review.flagged(text, self.voice, self.options.rules):
+            return False
+        self.report.untouched += 1
+        return True
+
+    def _review(self, sources: list[str], results: list[str]) -> list[str]:
+        """``results`` checked against ``sources`` sentence by sentence: a
+        change is kept only if it passes the rules and then the checker."""
+        if not self.options.review:
+            return results
+        plans = [review.align(s, r) for s, r in zip(sources, results)]
+        asks = [group for groups in plans for group in groups if self._screen(group)]
+        if asks:
+            self.progress.begin(len(asks), "changes checked")
+            with ThreadPoolExecutor(min(self.options.parallel, len(asks))) as pool:
+                list(pool.map(self._ask, asks))
+        for groups in plans:
+            for group in groups:
+                if group.problems:
+                    self._kept_sentence(group)
+        return [review.assemble(groups) for groups in plans]
+
+    def _screen(  # pylint: disable=too-many-return-statements  # one per way to settle
+        self, group: review.Group
+    ) -> bool:
+        """Settle ``group`` by the rules alone; True when it is left for the
+        checker to decide."""
+        if not group.changed:
+            return False
+        if not group.edited:
+            group.problems = [f"the rewrite drops the sentence {group.before!r}"]
+            return False
+        if not group.source:
+            group.problems = [f"the rewrite adds the sentence {group.after!r}"]
+            return False
+        rules = self.options.rules
+        if self.options.targeted and not any(
+            review.needs_work(unit, self.voice, rules) for unit in group.source
+        ):
+            return False  # it already fits the voice: left as written
+        group.edited = [review.restore_form(group.before, group.after)]
+        if not group.changed:
+            return False
+        group.problems = review.checks(group.before, group.after, self.options.keep_person)
+        if group.problems:
+            return False
+        group.accepted = self.judge is None
+        return not group.accepted
+
+    def _ask(self, group: review.Group) -> None:
+        """Put one change to the checker (its own copy of the backend)."""
+        judge = copy.copy(self.judge)
+        reply = judge.rewrite(review.judge_messages(group.before, group.after), 0.0)
+        problem = review.verdict(reply)
+        if problem:
+            group.problems = [problem]
+        else:
+            group.accepted = True
+        self.progress.advance()
+
+    def _kept_sentence(self, group: review.Group) -> None:
+        detail = _summarize(group.problems)
+        if self.options.strict:
+            raise ValidationError(f"rewrite failed fidelity checks: {detail}")
+        self.report.reverted.append(group.problems)
+        sentence = group.before if len(group.before) <= 80 else group.before[:77] + "..."
+        self.report.warnings.append(f"kept the original of {sentence!r}: {detail}")
+
+
+def _keep_paragraphs(source: str, rewrite: str) -> str:
+    """``rewrite`` without the paragraph breaks the model added to a source
+    that has none: list items stay on their own lines, prose is rejoined.
+    In a source with breaks, a blank line the model put before a list item
+    the source runs on from the line above is removed."""
+    if _BLANK_LINES_RE.search(source):
+        spaced = {m.group(1) for m in _SPACED_ITEM_RE.finditer(source)}
+        return _SPACED_ITEM_RE.sub(
+            lambda m: m.group(0) if m.group(1) in spaced else "\n" + m.group(1), rewrite
+        )
+    parts = _BLANK_LINES_RE.split(rewrite)[::2]
+    out = parts[0]
+    for part in parts[1:]:
+        out += ("\n" if _LIST_ITEM_RE.match(part) else " ") + part
+    return out
+
+
+def _pieces(text: str) -> list[str]:
+    """``text`` split into smaller pieces to rewrite separately, losslessly:
+    its paragraphs, or for a single paragraph that is a list, its lines.
+    Empty when there is nothing smaller to try."""
+    pieces = _BLANK_LINES_RE.split(text)
+    if len(pieces) > 1:
+        return pieces
+    lines = text.splitlines(keepends=True)
+    if len(lines) > 1 and any(_LIST_ITEM_RE.match(line) for line in lines):
+        return lines
+    return []
 
 
 def _split_units(text: str, count: int) -> list[str] | None:
@@ -391,6 +692,15 @@ _CATEGORIES = (
     ("markup ", "formatting lost"),
     ("the rewrite switched to", "language drift"),
     ("the rewrite was empty", "empty reply"),
+    ("the rewrite has ", "length changed"),
+    ("placeholder ", "placeholder lost"),
+    ("name ", "name changed"),
+    ("the rewrite says ", "person changed"),
+    ("the rewrite changes ", "claim changed"),
+    ("the rewrite drops ", "sentence dropped"),
+    ("the rewrite adds ", "sentence added"),
+    ("the checker found", "meaning changed"),
+    ("placeholder left", "placeholder lost"),
 )
 
 

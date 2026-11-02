@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,7 @@ from .conftest import run
 REPO = Path(__file__).resolve().parent.parent
 
 
-def _rc(tmp_path: Path, text: str, mode: int = 0o600) -> Path:
+def _rc(tmp_path: Path, text: str, mode: int = stat.S_IRUSR | stat.S_IWUSR) -> Path:
     path = tmp_path / "rc"
     path.write_text(text, "utf-8")
     os.chmod(path, mode)
@@ -55,8 +56,8 @@ def test_every_setting_and_unknown_keys(tmp_path: Path):
     path = _rc(
         tmp_path,
         "[rewrite]\nvoice = Mail  # inline note\nstrength = 0.8\nformat = text\n"
-        "strict = yes\ncolour = red\n"
-        "[backend]\nendpoint = http://127.0.0.1:1/v1#frag\nmodel =\n"
+        "strict = yes\ncolour = red\nreview = off\nevery_sentence = on\n"
+        "[backend]\nendpoint = http://127.0.0.1:1/v1#frag\nmodel =\njudge_model = j:1\n"
         "[style]\npassive_voice = off\nen_dashes = no\nem_dashes = false\n"
         "exclamation_marks = 0\nsemicolons = off\nai_artifact_filter = off\n[extra]\nx = 1\n",
     )
@@ -69,6 +70,7 @@ def test_every_setting_and_unknown_keys(tmp_path: Path):
     )
     assert settings.endpoint == "http://127.0.0.1:1/v1#frag"
     assert settings.model is None
+    assert (settings.review, settings.every_sentence, settings.judge_model) == (False, True, "j:1")
     assert settings.rules == StyleRules(False, False, False, False, False, False)
     assert [w.split("] ")[-1] for w in settings.warnings] == ["colour", "x"]
 
@@ -88,7 +90,7 @@ def test_bad_values_are_usage_errors(tmp_path: Path, text, message):
 
 
 def test_unsafe_or_odd_files_are_refused(tmp_path: Path, monkeypatch):
-    path = _rc(tmp_path, "[style]\n", 0o622)
+    path = _rc(tmp_path, "[style]\n", stat.S_IRUSR | stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
     with pytest.raises(UsageError, match="chmod go-w"):
         config_mod.load(path)
     with pytest.raises(UsageError, match="not a regular file"):
@@ -140,7 +142,8 @@ def test_cli_uses_rc_voice_and_rules(trained, tmp_path: Path, monkeypatch):
     assert (code, out) == (EXIT_OK, "A\u2014b.\n")
     other = _rc(tmp_path / "..", "[rewrite]\nvoice = Nobody\n")
     code, _, err = run(["--config", str(other), "--backend", "mock", "-"], "x", registry=trained)
-    assert code != EXIT_OK and "Nobody" in err
+    assert code != EXIT_OK
+    assert "Nobody" in err
 
 
 def test_cli_without_any_voice(trained):
@@ -159,5 +162,6 @@ def test_first_person_setting(tmp_path: Path, value, expected):
 
 
 def test_first_person_setting_rejects_nonsense(tmp_path: Path):
+    path = _rc(tmp_path, "[style]\nfirst_person = they\n")
     with pytest.raises(UsageError, match="plural"):
-        config_mod.load(_rc(tmp_path, "[style]\nfirst_person = they\n"))
+        config_mod.load(path)

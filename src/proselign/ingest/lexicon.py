@@ -56,7 +56,7 @@ MODEL_WORDS = (
     "tapestry myriad plethora realm landscape navigate unlock embark vibrant"
 ).split()
 # An opener must lead into a sentence; "Jeff," on its own is a greeting.
-_OPENER = re.compile(r"^((?:[A-Z][\w']*)(?: [\w']+){0,2}), (?:[\w'\"(]+[ ,;:]+){3}")
+_OPENER = re.compile(r"^([A-Z][\w']*(?: [\w']+){0,2}), (?:[\w'\"(]+[ ,;:]+){3}")
 _SERIAL = re.compile(r"\b\w+, \w+(?: \w+)?, (?:and|or) \w")
 _NO_SERIAL = re.compile(r"\b\w+, \w+(?: \w+)? (?:and|or) \w")
 _US = re.compile(

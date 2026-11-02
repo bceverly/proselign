@@ -25,18 +25,31 @@ strict = off
 progress = on
 # Leave a Word document's title or cover page completely untouched.
 keep_title_page = on
+# Review every rewrite sentence by sentence and keep the original of any
+# sentence whose change fails a check (see judge_model below).
+review = on
+# Rewrite every sentence.  When off, only sentences that need work (a style
+# rule broken, far longer than the author writes, contractions the author
+# would use) are changed and the rest are left exactly as written.
+every_sentence = off
 # Passages of the voice's own writing shown to the model with each chunk
 # (0-8).  Examples are the strongest style signal; 0 turns them off.
 examples = 3
 # Rewrites generated per chunk (1-5); the one closest to the voice is kept.
 # Each extra candidate costs another model call.
 candidates = 1
+# Chunks sent to the model at once (1-16).  Faster only if the server runs
+# requests side by side (Ollama: OLLAMA_NUM_PARALLEL=4).
+parallel = 4
 
 [backend]
 # openai-compat (llama.cpp, Ollama, vLLM, ...) or mock.
 backend = openai-compat
 endpoint = http://127.0.0.1:8080/v1
 model = local
+# Model that checks each changed sentence keeps its meaning.  Default: the
+# base model of a fine-tuned voice, else the model above.
+# judge_model = qwen2.5:14b-instruct
 # Refuse any endpoint that is not on this machine.
 offline = on
 

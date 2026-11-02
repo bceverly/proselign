@@ -82,6 +82,22 @@ def test_build_voice_and_append(corpus: Path, tmp_path: Path):
     assert grown.corpus_summary["documents"] == 5
 
 
+def test_build_voice_leaves_out_short_documents(corpus: Path, tmp_path: Path):
+    note = tmp_path / "note.md"
+    note.write_text("Sure, sounds good.", "utf-8")
+    skipped: list[str] = []
+    voice = build_voice(
+        "Bryan", [corpus, note], min_words=20, on_skip=lambda p, why: skipped.append(why)
+    )
+    assert voice.corpus_summary["min_words"] == 20
+    assert voice.corpus_summary["documents"] == 4
+    assert skipped == ["shorter than 20 words"]
+    again = build_voice("Bryan", [note], base=voice, on_skip=lambda p, why: None)
+    assert again.corpus_summary["min_words"] == 20  # an append keeps the threshold
+    with pytest.raises(UsageError, match="negative"):
+        build_voice("Bryan", [corpus], min_words=-1)
+
+
 def test_build_voice_rejects_thin_corpus(tmp_path: Path):
     (tmp_path / "tiny.md").write_text("Too short.", "utf-8")
     with pytest.raises(UsageError, match="only"):

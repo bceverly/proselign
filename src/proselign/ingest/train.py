@@ -24,20 +24,27 @@ def build_voice(
     paths: list[Path],
     base: Voice | None = None,
     on_skip: Callable[[Path, str], None] | None = None,
+    min_words: int | None = None,
 ) -> Voice:
     """Measure every document under ``paths`` and return the resulting voice.
 
     With ``base`` (``train --append``), previously recorded sources whose
     files are still readable are re-measured together with the new ones, so
     the profile always describes the whole corpus, never a running average.
-    ``on_skip`` hears about each file that could not be used.
+    ``on_skip`` hears about each file that could not be used.  Documents
+    (mailbox messages) under ``min_words`` words are left out; an appended
+    voice keeps the threshold it was trained with unless given a new one.
     """
+    if min_words is None:
+        min_words = int((base.corpus_summary if base else {}).get("min_words", 0))
+    if min_words < 0:
+        raise UsageError("--min-words must not be negative")
     sources = list(paths)
     if base is not None:
         sources.extend(
             Path(s["path"]) for s in base.sources if "path" in s and Path(s["path"]).is_file()
         )
-    documents = load_documents(sources, on_skip)
+    documents = load_documents(sources, on_skip, min_words)
     if not documents:
         raise UsageError("no readable documents found (.txt, .md, .docx, .doc, .pdf, .mbox)")
 
@@ -61,6 +68,7 @@ def build_voice(
         "documents": sum(doc.parts for doc in documents),
         "words": total_words,
         "tokens_estimated": int(total_words * 1.3),
+        "min_words": min_words,
     }
     voice.sources = [{"path": str(doc.path.resolve()), "sha256": doc.sha256} for doc in documents]
     voice.updated_at = (

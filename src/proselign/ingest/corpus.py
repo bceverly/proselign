@@ -97,12 +97,16 @@ def normalize(text: str) -> str:
 
 
 def load_documents(
-    paths: list[Path], on_skip: Callable[[Path, str], None] | None = None
+    paths: list[Path],
+    on_skip: Callable[[Path, str], None] | None = None,
+    min_words: int = 0,
 ) -> list[Document]:
     """Read, normalize and de-duplicate (by content hash) every document.
 
     Files that are too large or cannot be read are left out; ``on_skip`` is
-    told about each one and why.
+    told about each one and why.  Parts (a mailbox's messages, or a whole
+    file) shorter than ``min_words`` are left out too: quick notes are a
+    different register from the author's considered writing.
     """
     documents: list[Document] = []
     seen: set[str] = set()
@@ -117,16 +121,17 @@ def load_documents(
             continue
         seen.add(digest)
         try:
-            parts = [t for t in (normalize(p) for p in extract_parts(path, raw)) if t]
+            found = [t for t in (normalize(p) for p in extract_parts(path, raw)) if t]
         except ExtractError as exc:
             _skip(on_skip, path, str(exc))
             continue
+        parts = [t for t in found if len(t.split()) >= min_words]
         if parts:
             documents.append(
                 Document(path=path, sha256=digest, text="\n\n".join(parts), parts=len(parts))
             )
         else:
-            _skip(on_skip, path, "no text")
+            _skip(on_skip, path, f"shorter than {min_words} words" if found else "no text")
     return documents
 
 

@@ -131,7 +131,8 @@ def test_formatting_survives_as_tags_and_comes_back_as_runs():
     assert '<w:pPr><w:jc w:val="both"/></w:pPr><w:bookmarkStart w:id="0" w:name="b"/>' in xml
     assert "proofErr" not in xml
     assert f'<w:r w:rsidR="00A1">{BOLD}<w:t xml:space="preserve">rise sharply</w:t></w:r>' in xml
-    assert "&amp; costs " in xml and "&lt;this&gt;" in xml
+    assert "&amp; costs " in xml
+    assert "&lt;this&gt;" in xml
 
 
 @pytest.mark.parametrize(
@@ -186,8 +187,9 @@ def test_refusals(data, message):
 
 def test_size_limits(monkeypatch):
     monkeypatch.setattr(docx_mod, "MAX_PART_BYTES", 10)
+    data = _docx(_p(_r(SENTENCE)))
     with pytest.raises(UsageError, match="too large"):
-        rewrite_docx(_docx(_p(_r(SENTENCE))), _upper)
+        rewrite_docx(data, _upper)
 
 
 def test_numeric_entities_round_trip():
@@ -219,7 +221,7 @@ def test_units_are_batched_and_split_back():
 
 
 def test_failed_batch_is_retried_one_paragraph_at_a_time():
-    backend = ScriptedBackend(["dropped markers", "still none", "nope", "A2.", "B2."])
+    backend = ScriptedBackend(["dropped markers", "still none", "A2.", "B2."])
     rewriter = Rewriter(VOICE, backend, Options())
     assert rewriter.rewrite_units(["A.", "B."]) == ["A2.", "B2."]
     assert rewriter.report.fallbacks == 0
@@ -231,9 +233,7 @@ def test_format_note_names_tags():
 
 
 def test_damaged_markers_fall_back_to_one_at_a_time():
-    backend = ScriptedBackend(
-        ["[[2]] B. [[1]] A.", "[[2]] B. [[1]] A.", "[[2]] B. [[1]] A.", "A2.", "B2."]
-    )
+    backend = ScriptedBackend(["[[2]] B. [[1]] A.", "[[2]] B. [[1]] A.", "A2.", "B2."])
     rewriter = Rewriter(VOICE, backend, Options())
     assert rewriter.rewrite_units(["A.", "B."]) == ["A2.", "B2."]
 
@@ -263,7 +263,8 @@ def test_cli_rewrites_docx_to_output(trained, tmp_path: Path):
     )
     assert code == EXIT_OK, err
     assert not stdout
-    assert "rewrote 0 paragraph(s)" in err and "unchanged by the rewrite" in err
+    assert "rewrote 0 paragraph(s)" in err
+    assert "unchanged by the rewrite" in err
     assert docx_text(out.read_bytes()) == docx_text(source.read_bytes())
 
 
@@ -328,7 +329,8 @@ def test_typed_list_markers_are_kept_and_the_item_rewritten():
         f'<w:p w14:paraId="1">{marker}<w:r w:rsidR="00A1">{BOLD}<w:t xml:space="preserve">LEAD IN'
         in xml
     )
-    assert "THEN THE REST OF THE SENTENCE." in xml and SENTENCE.upper() in xml
+    assert "THEN THE REST OF THE SENTENCE." in xml
+    assert SENTENCE.upper() in xml
 
 
 # --- title pages ------------------------------------------------------------

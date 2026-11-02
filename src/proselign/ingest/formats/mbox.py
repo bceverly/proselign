@@ -71,7 +71,7 @@ def mbox_messages(data: bytes) -> list[str]:
     for chunk in _SEPARATOR.split(data)[1:]:
         try:
             body = _message_text(email.message_from_bytes(chunk, policy=email.policy.default))
-        except (ValueError, LookupError, TypeError, AttributeError, IndexError, RecursionError):
+        except (ValueError, LookupError, TypeError, AttributeError, RecursionError):
             continue  # one damaged message must not cost the rest of the mailbox
         bodies.append(_own_words(body))
     return [text for text in _trim_repeated_tails(bodies) if text]

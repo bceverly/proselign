@@ -28,7 +28,7 @@ _NUMBER = re.compile(rb"[+-]?(?:\d+(?:\.\d*)?|\.\d+)")
 _REF_TAIL = re.compile(rb"\s+(\d+)\s+R(?![^\s()<>\[\]{}/%])")
 # Bounded counts keep the scan linear on long runs of digits and spaces;
 # object numbers never exceed 10 digits, generations 5.
-_OBJECT = re.compile(rb"(?<![0-9])([0-9]{1,10})\s{1,8}([0-9]{1,5})\s{1,8}obj(?![^\s()<>\[\]{}/%])")
+_OBJECT = re.compile(rb"(?<!\d)(\d{1,10})\s{1,8}(\d{1,5})\s{1,8}obj(?![^\s()<>\[\]{}/%])")
 _ESCAPES = {ord("n"): b"\n", ord("r"): b"\r", ord("t"): b"\t", ord("b"): b"\b", ord("f"): b"\f"}
 
 
@@ -345,7 +345,7 @@ def unhex(text: bytes) -> bytes:
     digits = bytes(c for c in text if c not in _WHITESPACE)
     try:
         return binascii.unhexlify(digits + b"0" * (len(digits) % 2))
-    except (binascii.Error, ValueError) as exc:
+    except ValueError as exc:  # binascii.Error is a ValueError
         raise ExtractError("malformed PDF hex string") from exc
 
 

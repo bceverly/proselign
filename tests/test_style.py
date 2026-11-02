@@ -110,6 +110,8 @@ def test_prompt_carries_directives():
         ("Great! Really?! Yes!!", "Great. Really? Yes."),
         ("We shipped; it worked; Done.", "We shipped. It worked. Done."),
         ("Stay calm, \u2014 then go.", "Stay calm, then go."),
+        ("Wait\u2014\u2014 now.", "Wait, now."),
+        ("Pages 10\u2013\u201312.", "Pages 10-12."),
     ],
 )
 def test_punctuate_enforces_punctuation_rules(candidate, expected):
@@ -117,6 +119,14 @@ def test_punctuate_enforces_punctuation_rules(candidate, expected):
     assert violations("source", candidate, rules)
     assert punctuate(candidate, rules) == expected
     assert not violations("source", expected, rules)
+
+
+def test_punctuate_is_fast_on_long_runs_of_spaces():
+    rules = StyleRules(ai_filter=False, **_off())
+    spaces = " " * 100_000
+    text = f"a{spaces}\u2014{spaces}b{spaces}\u2013{spaces}c"
+    assert punctuate(text, rules) == "a, b, c"
+    assert clean("x", f"a{spaces}<<<PROSELIGN_INPUT_0123456789abcdef>>>", STRICT) == "a"
 
 
 def _off() -> dict:
@@ -196,14 +206,14 @@ def test_violations():
 def test_engine_asks_again_then_accepts_best_with_warning():
     backend = ScriptedBackend(["It was decided.", "We decided."])
     rewriter = Rewriter(_voice(), backend, Options(rules=STRICT))
-    assert rewriter.rewrite("Decision made.\n") == "We decided.\n"
+    assert rewriter.rewrite("We made a decision.\n") == "We decided.\n"
     assert rewriter.report.repaired == 1
     assert "passive" in backend.prompts[1][1].content
 
     stubborn = Rewriter(
         _voice(), ScriptedBackend(["It was decided."] * 2), Options(rules=STRICT, max_repairs=1)
     )
-    assert stubborn.rewrite("Decision made.\n") == "It was decided.\n"
+    assert stubborn.rewrite("We made a decision.\n") == "It was decided.\n"
     assert stubborn.report.fallbacks == 0
     assert "style rules not fully met" in stubborn.report.warnings[0]
 
@@ -235,6 +245,7 @@ def test_first_person_plural_directive_and_check():
     plural = StyleRules(first_person="plural")
     text = "\n".join(directives(_voice(), plural))
     assert "first person plural only" in text
+    assert "Do not turn anyone else into 'we'" in text
     assert "first person (I, we) often" not in text
     assert "first person singular" in "\n".join(
         directives(_voice(), StyleRules(first_person="singular"))
@@ -253,5 +264,32 @@ def test_first_person_plural_directive_and_check():
 def test_engine_asks_for_plural_until_it_gets_it():
     backend = ScriptedBackend(["I agree with my team.", "We agree with our team."])
     rewriter = Rewriter(_voice(), backend, Options(rules=StyleRules(first_person="plural")))
-    assert rewriter.rewrite("Agreed.") == "We agree with our team."
+    assert rewriter.rewrite("I side with my team.") == "We agree with our team."
     assert "instead of: I, my" in backend.prompts[1][1].content
+
+
+def test_a_voice_without_measurements_keeps_the_texts_own_style():
+    plain = directives(Voice(display_name="Original"), StyleRules())
+    assert plain[0].startswith("Keep the original text's own style")
+    assert not any("contraction" in d.lower() and "full" in d for d in plain)
+    assert not any("words per sentence" in d for d in plain)
+    assert len(plain) == 2  # the style line and the AI-phrasing filter
+    rules = StyleRules(em_dashes=False, passive_voice=False, first_person="plural", ai_filter=False)
+    strict = directives(Voice(display_name="Original"), rules)
+    assert any("em dashes" in d for d in strict)
+    assert any("active voice only" in d for d in strict)
+    assert any("first person plural" in d for d in strict)
+    assert len(strict) == 4
+
+
+def test_bold_the_original_did_not_have_is_removed():
+    assert clean("Period: a b", "**Period:** a b", StyleRules()) == "Period: a b"
+    assert clean("**Period** a", "**Period** b", StyleRules()) == "**Period** b"
+
+
+def test_an_added_pleasantry_at_the_end_is_removed():
+    source = "Thank you again for the list. It changed where we look."
+    reply = "Thanks a bunch for the list.\n\nHope everything's going well on your end!"
+    assert clean(source, reply, StyleRules()) == "Thanks a bunch for the list."
+    kept = source + "\n\nHope all is well."
+    assert clean(kept, kept, StyleRules()) == kept

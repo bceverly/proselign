@@ -100,7 +100,8 @@ _PREAMBLE_RE = re.compile(
 _CHATTY_LEAD_RE = re.compile(r"\A(?:sure|certainly|of course|absolutely)[!.,][ \t]*\n+", re.I)
 _OUTRO_RE = re.compile(
     r"\n+[^\n]{0,40}\b(?:let me know if|i hope this helps|hope this helps|feel free to ask"
-    r"|happy to (?:help|adjust))[^\n]*\Z",
+    r"|happy to (?:help|adjust)|hope (?:everything|all|things|you)\b[^\n]*\b(?:well|good|great))"
+    r"[^\n]*\Z",
     re.IGNORECASE,
 )
 _SIGN_OFF_RE = re.compile(
@@ -108,7 +109,7 @@ _SIGN_OFF_RE = re.compile(
     r"|many thanks|sincerely|all the best|take care)[,.!]?[ \t]*(?:\n[^\n]{1,40})?[ \t]*\Z",
     re.IGNORECASE,
 )
-_LEAKED_MARKER_RE = re.compile(r"[ \t]*<<<(?:END_)?PROSELIGN_INPUT_[0-9a-f]{16}>>>[ \t]*\n?")
+_LEAKED_MARKER_RE = re.compile(r"<<<(?:END_)?PROSELIGN_INPUT_[0-9a-f]{16}>>>[ \t]*\n?")
 _INVISIBLE = dict.fromkeys(map(ord, "\u200b\u200c\u200d\u2060\ufeff"), None)
 _SPACES = {ord("\u00a0"): " ", ord("\u202f"): " "}
 _CURLY = {ord("\u2018"): "'", ord("\u2019"): "'", ord("\u201c"): '"', ord("\u201d"): '"'}
@@ -138,24 +139,93 @@ def _strip_protected(text: str) -> str:
 # --- instructions ---------------------------------------------------------
 
 
-def directives(voice: Voice, rules: StyleRules) -> list[str]:
-    """Concrete writing instructions for ``voice`` under ``rules``."""
+# Naming the actor the original names; "we" here would make the author the
+# subject of whatever someone else did.
+ACTIVE_VOICE = (
+    "Use the active voice only, naming whoever the original says acted: 'the board "
+    "decided', not 'it was decided by the board'. Never make the author ('we') the "
+    "subject of something someone else did; if the original does not say who acted, "
+    "leave that sentence as it is."
+)
+
+
+# The groups the voice's instructions fall into; ``proselign eval --ablate``
+# leaves out one at a time to see what each contributes.
+DIRECTIVE_GROUPS = (
+    "sentences",
+    "contractions",
+    "person",
+    "passive",
+    "word length",
+    "punctuation",
+    "vocabulary",
+)
+
+
+def directives(voice: Voice, rules: StyleRules, omit: frozenset[str] = frozenset()) -> list[str]:
+    """Concrete writing instructions for ``voice`` under ``rules``, leaving
+    out the groups (from ``DIRECTIVE_GROUPS``) named in ``omit``."""
+    if not voice.metrics:
+        return _keep_style_directives(rules)
+    out = [text for group, text in grouped_directives(voice, rules) if group not in omit]
+    if rules.ai_filter:
+        out.append(
+            "Avoid stock AI phrasing (for example: delve, tapestry, testament to, "
+            "it's worth noting, seamlessly, furthermore, moreover, in conclusion)."
+        )
+    return out
+
+
+def grouped_directives(voice: Voice, rules: StyleRules) -> list[tuple[str, str]]:
+    """The voice's instructions, each with the group it belongs to."""
     m = voice.metrics or {}
-    out: list[str] = []
+    out: list[tuple[str, str]] = []
     sentence = m.get("sentence_length_words", {})
     if sentence.get("mean"):
         out.append(
-            f"Average about {round(sentence['mean'])} words per sentence; half of the "
-            f"sentences have {round(sentence.get('median', sentence['mean']))} words or fewer. "
-            "Mix short and long sentences rather than making them uniform, and do not "
-            "shorten the author's sentences on principle."
+            (
+                "sentences",
+                f"Average about {round(sentence['mean'])} words per sentence; half of the "
+                f"sentences have {round(sentence.get('median', sentence['mean']))} words or "
+                "fewer. Mix short and long sentences rather than making them uniform, and "
+                "do not shorten the author's sentences on principle.",
+            )
         )
     paragraph = m.get("paragraph_length_sentences", {}).get("mean")
     if paragraph:
-        out.append(f"Keep paragraphs to about {max(1, round(paragraph))} sentence(s).")
+        out.append(
+            ("sentences", f"Keep paragraphs to about {max(1, round(paragraph))} sentence(s).")
+        )
     out.extend(_rate_directives(m, rules))
-    out.extend(_punctuation_directives(m.get("punctuation_per_1k", {}), rules))
-    out.extend(lexicon_directives(voice.lexicon or {}))
+    out.extend(
+        ("punctuation", text)
+        for text in _punctuation_directives(m.get("punctuation_per_1k", {}), rules)
+    )
+    out.extend(("vocabulary", text) for text in lexicon_directives(voice.lexicon or {}))
+    return out
+
+
+def _keep_style_directives(rules: StyleRules) -> list[str]:
+    """For a voice with no measurements (``proselign eval``'s control): keep
+    the text's own style, apart from what the user's settings forbid."""
+    out = [
+        "Keep the original text's own style: its sentence lengths, vocabulary, "
+        "contractions, use of I and we, and tone. Rephrase it without moving it "
+        "toward any particular writer."
+    ]
+    forbidden = [
+        ("em_dashes", "Do not use em dashes (\u2014); use commas, colons or separate sentences."),
+        (
+            "en_dashes",
+            "Do not use en dashes (\u2013); write number ranges with a hyphen (2019-2021).",
+        ),
+        ("exclamation_marks", "Do not use exclamation marks."),
+        ("semicolons", "Do not use semicolons."),
+    ]
+    out.extend(text for name, text in forbidden if not getattr(rules, name))
+    if not rules.passive_voice:
+        out.append(ACTIVE_VOICE)
+    out.extend(_person_directives(30.0, rules) if rules.first_person != "voice" else [])
     if rules.ai_filter:
         out.append(
             "Avoid stock AI phrasing (for example: delve, tapestry, testament to, "
@@ -188,45 +258,48 @@ def lexicon_directives(lexicon: dict) -> list[str]:
     return out
 
 
-def _rate_directives(m: dict, rules: StyleRules) -> list[str]:
-    out = []
-    contractions = m.get("contractions_per_1k", 0)
+def _rate_directives(m: dict, rules: StyleRules) -> list[tuple[str, str]]:
+    out = [("contractions", _contraction_directive(m.get("contractions_per_1k", 0)))]
+    out.extend(
+        ("person", text) for text in _person_directives(m.get("first_person_per_1k", 0), rules)
+    )
+    second = m.get("second_person_per_1k", 0)
+    if second >= 8:
+        out.append(("person", "Address the reader directly as you."))
+    elif second < 2:
+        out.append(("person", "Rarely address the reader as you."))
+    word_length = m.get("mean_word_length", 0)
+    if word_length and word_length < 4.7:
+        out.append(("word length", "Prefer short, plain, everyday words."))
+    elif word_length > 5.2:
+        out.append(("word length", "Precise technical and business vocabulary is natural here."))
+    if not rules.passive_voice:
+        out.append(("passive", ACTIVE_VOICE))
+    elif m.get("passive_per_1k", 0) < 5:
+        out.append(("passive", "Strongly prefer the active voice."))
+    return out
+
+
+def _contraction_directive(contractions: float) -> str:
     # A concrete rate: "occasionally" alone makes models contract far too often.
     every = round(1000 / contractions, -1) if contractions else 0
     if contractions >= 8:
-        out.append(
-            f"Use contractions freely (don't, it's, we're), about one every {every:.0f} words."
-        )
-    elif contractions >= 3:
-        out.append(
+        return f"Use contractions freely (don't, it's, we're), about one every {every:.0f} words."
+    if contractions >= 3:
+        return (
             f"Use contractions sparingly: about one every {every:.0f} words; write most "
             "words out in full."
         )
-    else:
-        out.append("Avoid contractions; write words out in full.")
-    out.extend(_person_directives(m.get("first_person_per_1k", 0), rules))
-    second = m.get("second_person_per_1k", 0)
-    if second >= 8:
-        out.append("Address the reader directly as you.")
-    elif second < 2:
-        out.append("Rarely address the reader as you.")
-    word_length = m.get("mean_word_length", 0)
-    if word_length and word_length < 4.7:
-        out.append("Prefer short, plain, everyday words.")
-    elif word_length > 5.2:
-        out.append("Precise technical and business vocabulary is natural here.")
-    if not rules.passive_voice:
-        out.append("Use the active voice only: never 'was decided', always 'we decided'.")
-    elif m.get("passive_per_1k", 0) < 5:
-        out.append("Strongly prefer the active voice.")
-    return out
+    return "Avoid contractions; write words out in full."
 
 
 def _person_directives(first: float, rules: StyleRules) -> list[str]:
     if rules.first_person == "plural":
         return [
-            "Write in the first person plural only: we, us, our, ours, ourselves. Never use "
-            "I, me, my, mine or myself; 'I think' becomes 'we think'."
+            "When the author speaks of themselves, use the first person plural only: we, "
+            "us, our, ours, ourselves. Never use I, me, my, mine or myself; 'I think' "
+            "becomes 'we think'. Do not turn anyone else into 'we': what other people "
+            "did, said or own stays theirs, and 'you' and 'your' stay as they are."
         ]
     if rules.first_person == "singular":
         return ["Speak for the author in the first person singular: I, me, my."]
@@ -272,7 +345,7 @@ def punctuate(text: str, rules: StyleRules) -> str:
 
 
 def _strip_artifacts(source: str, text: str) -> str:
-    text = _LEAKED_MARKER_RE.sub("", text).translate(_INVISIBLE).translate(_SPACES)
+    text = _drop_markers(text).translate(_INVISIBLE).translate(_SPACES)
     if not _PREAMBLE_RE.match(source):
         text = _PREAMBLE_RE.sub("", text, count=1)
     if not _CHATTY_LEAD_RE.match(source):
@@ -281,31 +354,73 @@ def _strip_artifacts(source: str, text: str) -> str:
         text = _OUTRO_RE.sub("", text)
     if not _SIGN_OFF_RE.search(source.rstrip()):
         text = _SIGN_OFF_RE.sub("", text.rstrip())
-    text = text.strip()
+    text = _unwrap(source, text.strip())
+    if not any(c in source for c in "\u2018\u2019\u201c\u201d"):
+        text = text.translate(_CURLY)
+    if "\u2026" not in source:
+        text = text.replace("\u2026", "...")
+    if "**" not in source:  # bold the original did not have
+        text = text.replace("**", "")
+    return text
+
+
+def _drop_markers(text: str) -> str:
+    """``text`` without leaked input markers or the spaces before them."""
+    pieces = _LEAKED_MARKER_RE.split(text)
+    return "".join(piece.rstrip(" \t") for piece in pieces[:-1]) + pieces[-1]
+
+
+def _unwrap(source: str, text: str) -> str:
+    """``text`` without quotes or a code fence wrapped around all of it."""
     for opener, closer in (('"', '"'), ("\u201c", "\u201d"), ("```", "```")):
         wrapped = text.startswith(opener) and text.endswith(closer) and len(text) > 2 * len(opener)
         if wrapped and not source.strip().startswith(opener):
             text = text[len(opener) : -len(closer)].strip()
             if opener == "```":
                 text = text.split("\n", 1)[1] if "\n" in text else text
-    if not any(c in source for c in "\u2018\u2019\u201c\u201d"):
-        text = text.translate(_CURLY)
-    if "\u2026" not in source:
-        text = text.replace("\u2026", "...")
     return text
+
+
+def _replace_marks(text: str, mark: str, pick) -> str:
+    """Replace every ``mark`` in ``text``: ``pick(before, after)`` gets the
+    text on either side and returns the new before, replacement and after.
+    (Plain string work: a regex with optional spaces on both sides of the
+    mark backtracks badly on long runs of spaces.)  A run of marks counts as one."""
+    pieces = text.split(mark)
+    if len(pieces) > 2:
+        pieces = [pieces[0], *(p for p in pieces[1:-1] if p.strip(" \t")), pieces[-1]]
+    out = [pieces[0]]
+    for piece in pieces[1:]:
+        before, middle, after = pick(out[-1], piece)
+        out[-1:] = [before, middle, after]
+    return "".join(out)
+
+
+def _em_dash(before: str, after: str) -> tuple[str, str, str]:
+    # "word \u2014 word" and "word\u2014word" become "word, word"; a dash at
+    # the edge of a line just goes.
+    left, right = before.rstrip(" \t"), after.lstrip(" \t")
+    between = left[-1:].strip() and right[:1].strip()
+    return left, ", " if between else " ", right
+
+
+def _en_dash(before: str, after: str) -> tuple[str, str, str]:
+    # "word \u2013 word" becomes "word, word"; ranges (2019\u20132021) and
+    # anything else get a hyphen.
+    left, right = before.rstrip(" \t"), after.lstrip(" \t")
+    if left != before and right != after and left[-1:].strip() and right[:1].strip():
+        return left, ", ", right
+    return before, "-", after
 
 
 def _punctuate(text: str, rules: StyleRules) -> str:
     if not rules.em_dashes:
-        text = re.sub(r"(?<=\S)[ \t]*(?:\u2014| -- )[ \t]*(?=\S)", ", ", text)
-        text = re.sub(r"[ \t]*\u2014[ \t]*", " ", text)
+        text = _replace_marks(text.replace(" -- ", " \u2014 "), "\u2014", _em_dash)
     if not rules.en_dashes:
-        text = re.sub(r"(?<=\d)\u2013(?=\d)", "-", text)
-        text = re.sub(r"(?<=\S)[ \t]+\u2013[ \t]+(?=\S)", ", ", text)
-        text = text.replace("\u2013", "-")
+        text = _replace_marks(text, "\u2013", _en_dash)
     if not rules.exclamation_marks:
         text = re.sub(r"!+(?=\s|$)", ".", text)
-        text = re.sub(r"\?\.", "?", text)
+        text = text.replace("?.", "?")
     if not rules.semicolons:
         text = re.sub(r";[ \t]+([a-z])", lambda m: ". " + m.group(1).upper(), text)
         text = re.sub(r";[ \t]+", ". ", text)

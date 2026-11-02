@@ -31,7 +31,7 @@ _COMPRESSED = 0x40000000
 _FIELD_BEGIN, _FIELD_SEPARATOR, _FIELD_END = "\x13", "\x14", "\x15"
 # Paragraph, cell/row end, line break, page/section break.
 _BREAKS = re.compile("[\r\x07\x0b\x0c]")
-_CONTROL = re.compile("[\x00-\x06\x08\x0e-\x1d]")
+_CONTROL = dict.fromkeys([*range(0x00, 0x07), 0x08, *range(0x0E, 0x1E)])
 
 
 def doc_text(data: bytes) -> str:
@@ -161,5 +161,5 @@ def _strip_fields(text: str) -> str:
 def _clean(text: str) -> str:
     text = _strip_fields(text)
     text = text.replace("\x1e", "-").replace("\x1f", "").replace("\xa0", " ")
-    text = _CONTROL.sub("", text)
+    text = text.translate(_CONTROL)
     return tidy(_BREAKS.split(text))
