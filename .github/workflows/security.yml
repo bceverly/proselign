@@ -131,6 +131,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: TruffleHog (verified secrets only)
-        uses: trufflesecurity/trufflehog@69734591624d2afb8e152fcc8f3c2325ab577dae # main-2026-10-29
+        uses: trufflesecurity/trufflehog@5a3176fcddc07bed6ee62a84adb613091030b243 # main-2026-10-29
         with:
           extra_args: --only-verified

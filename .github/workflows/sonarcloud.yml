@@ -48,7 +48,7 @@ jobs:
         run: make test VENV_ACTIVATE= PYTHON=python
       - name: SonarCloud scan
         # nosemgrep: generic.secrets.security.detected-sonarqube-docs-api-key.detected-sonarqube-docs-api-key
-        uses: SonarSource/sonarqube-scan-action@dcc5211de53084482f1c6779dda263459f5274f6 # master-2026-02-22
+        uses: SonarSource/sonarqube-scan-action@afe7ea15c200170268c076c3e60bd122cb44efc1 # master-2026-02-22
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
