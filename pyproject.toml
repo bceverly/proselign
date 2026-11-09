@@ -35,9 +35,9 @@ classifiers = [
 [project.optional-dependencies]
 # Only for ``proselign tune`` (fine-tuning on a CUDA GPU); install torch from
 # the PyTorch index that matches the machine's CUDA, e.g.
-#   pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+#   pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cu128
 tune = [
-    "torch==2.9.1",
+    "torch==2.14.1",
     "transformers==5.22.1",
     "peft==0.21.2",
     "bitsandbytes==0.50.2",
