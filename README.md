@@ -25,7 +25,7 @@ new text in that style while preserving its facts, figures, names, citations,
 quotations and structure.
 
 ```sh
-proselign train --voice Bryan ~/Documents/Writing/
+proselign train --voice Bryan ~/Documents/Writing/ https://example.com/
 cat foo.txt | proselign --voice Bryan > bar.txt
 ```
 
@@ -41,12 +41,15 @@ transfer tool with a hard rule that meaning comes first.
 
 - **Unix-first.** stdin to stdout, diagnostics to stderr, documented exit
   codes. stdout carries the transformed text and nothing else.
-- **Local-first.** No telemetry and no network calls by default. Rewriting runs
+- **Local-first.** No telemetry and no network calls by default (`train` reads
+  the web only when you give it a URL). Rewriting runs
   against a model *you* serve locally through any OpenAI-compatible endpoint
   (llama.cpp, vLLM, Ollama, LM Studio). `--offline` enforces loopback only.
 - **A voice is data, not a model.** A small, portable, versioned JSON profile:
-  measured stylometric features kept separate from interpretive style hints,
-  the author's vocabulary habits, and typical passages of their own writing
+  measured stylometric features (sentence length and rhythm, punctuation,
+  person, contractions, reading level and more) kept separate from
+  interpretive style hints, the author's vocabulary habits and recurring
+  phrases, and typical passages of their own writing
   that are shown to the model as examples (kept local, never exported by
   default).
   No per-author fine-tuning is required (LoRA adapters may come later, if
@@ -69,6 +72,7 @@ transfer tool with a hard rule that meaning comes first.
 | `proselign --voice NAME notes.md -o new.md` | Rewrite Markdown, keeping headings, code, tables, links and front matter as they are |
 | `proselign --voice NAME report.docx -o new.docx` | Rewrite a Word document's prose, keeping its formatting, styles, headers, footers, tables and images |
 | `proselign train --voice NAME PATH...` | Learn a voice from `.txt`, `.md`, `.docx`, `.doc` and `.pdf` documents and `.mbox` sent-mail mailboxes (`--append` to extend) |
+| `proselign train --voice NAME URL...` | Learn from writing on the web: a blog's front page reads every post (WordPress REST API, else the site's feed), a feed URL each entry, any other page that one article |
 | `proselign voices` | List voices |
 | `proselign inspect NAME` | Print a voice profile as JSON |
 | `proselign eval --voice NAME` | Measure how closely rewrites reproduce the voice (compare models and settings) |
@@ -76,7 +80,8 @@ transfer tool with a hard rule that meaning comes first.
 | `proselign delete NAME` | Remove a voice |
 
 Exit status: `0` ok, `1` unexpected error, `2` usage, `3` voice, `4` fidelity
-validation (`--strict`), `5` inference backend. See `man proselign`.
+validation (`--strict`), `5` inference backend, `6` a web page given to
+`train` cannot be fetched. See `man proselign`.
 
 ## Install
 
@@ -133,7 +138,7 @@ names its number and CWE, and CI runs them as their own named step.
 | 4 | Remote file inclusion (98) | No `eval`/`exec`/dynamic import; no pickle-family loaders; archives are JSON only |
 | 5 | SQL injection (89) | Every `execute()` must take a literal query (gate for the upcoming SQLite store) |
 | 6 | World-writable files (276) | Under `umask 000` the voice store is 0700, manifests 0600, exports 0600 |
-| 7 | Direct request (425) | Proselign never binds or listens; it only connects to the endpoint you configure |
+| 7 | Direct request (425) | Proselign never binds or listens; it only connects to the endpoint you configure and to URLs you give `train` |
 | 8 | `authenticated=1` (472) | Forged prompt delimiters in input stay data (per-request random nonces); archive manifests cannot choose their own location |
 | 9 | Home-grown crypto (327) | SHA-2 via hashlib and `secrets` only; no MD5/SHA-1, `random` or XOR |
 | 10 | Privilege escalation via Help (271) | No subprocess, shell, pager or browser launches anywhere in the tool |

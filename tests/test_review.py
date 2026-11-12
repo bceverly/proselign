@@ -149,6 +149,15 @@ def test_needs_work():
     assert not review.needs_work("We do not agree.", Voice(display_name="x"), ACTIVE)
 
 
+def test_spelled_out_words_are_left_when_the_text_already_contracts():
+    rules = StyleRules()
+    text = "We don't know yet. It's early. We can't say. We do not agree."
+    assert review.contracted_enough(text, VOICE)
+    assert not review.flagged(text, VOICE, rules)
+    assert review.flagged("We do not agree. It is late.", VOICE, rules)
+    assert not review.needs_work("We do not agree.", VOICE, rules, contracted=True)
+
+
 def test_flagged_and_focus():
     found = review.flagged("We like it. It was written.", VOICE, ACTIVE)
     assert [sentence for sentence, _ in found] == ["It was written."]
@@ -334,3 +343,10 @@ def test_judge_model_choice():
     assert pick(args, Config(), voice, on, backend).model == "k"
     assert pick(args, Config(), voice, Options(), backend) is None
     assert backend.model == "tuned-model"
+
+
+def test_a_sentence_with_an_avoided_word_is_flagged_for_rewording():
+    rules = StyleRules(avoid_words=("appears",))
+    found = review.flagged("We like it. It appears to work.", VOICE, rules)
+    assert [sentence for sentence, _ in found] == ["It appears to work."]
+    assert "appears" in found[0][1][0]

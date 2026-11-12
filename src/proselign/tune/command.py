@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import time
 from datetime import datetime, timezone
 from importlib import import_module
 from pathlib import Path
@@ -23,6 +24,8 @@ from proselign.voice.profile import Voice
 from proselign.voice.registry import Registry
 
 MIN_PAIRS = 50
+# Ollama frees an unloaded model's memory a moment after it answers.
+MEMORY_WAIT_SECONDS = 10
 DEFAULT_BASE = "Qwen/Qwen2.5-14B-Instruct"
 
 
@@ -78,11 +81,10 @@ def run(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             f"only {len(made)} training pairs; at least {MIN_PAIRS} are needed "
             "(train the voice on more writing)"
         )
-    for model in export.unload_models(endpoint):
-        say(f"unloaded {model} to free the GPU for training")
+    config = _free_the_gpu(base_config(args.base), endpoint, say)
     adapter = export.to_gguf(
         _train(made, args.base, directory, settings, say, progress),
-        base_config(args.base),
+        config,
         directory / export.ADAPTER_FILE,
     )
     name = args.name or tuned_name(voice)
@@ -101,6 +103,27 @@ def run(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         f"model {name} is ready: rewrites in voice {voice.display_name!r} now use it "
         "(--no-tuned to compare without it)"
     )
+
+
+def _free_the_gpu(config: dict, endpoint: str, say) -> dict:
+    """Unload Ollama's models and wait until the base ``config`` describes
+    fits in what is free; returns ``config``."""
+    for model in export.unload_models(endpoint):
+        say(f"unloaded {model} to free the GPU for training")
+    _wait_for_memory(trainer.memory_needed(config), endpoint)
+    return config
+
+
+def _wait_for_memory(needed: int, endpoint: str) -> None:
+    """Return once the GPU has ``needed`` bytes free, before any weights are
+    loaded; give up after ``MEMORY_WAIT_SECONDS``, naming what holds it."""
+    deadline = time.monotonic() + MEMORY_WAIT_SECONDS
+    while True:
+        free, total = trainer.free_memory()
+        if free >= needed or needed > total or time.monotonic() >= deadline:
+            break
+        time.sleep(1)
+    trainer.check_memory(needed, free, total, export.loaded_models(endpoint))
 
 
 def _pairs(  # pylint: disable=too-many-arguments,too-many-positional-arguments

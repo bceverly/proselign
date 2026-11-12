@@ -293,3 +293,69 @@ def test_an_added_pleasantry_at_the_end_is_removed():
     assert clean(source, reply, StyleRules()) == "Thanks a bunch for the list."
     kept = source + "\n\nHope all is well."
     assert clean(kept, kept, StyleRules()) == kept
+
+
+def test_directives_from_rhythm_diction_and_signature_habits():
+    voice = _voice(
+        sentence_rhythm={
+            "short_share": 0.24,
+            "long_share": 0.18,
+            "conjunction_start_share": 0.07,
+            "commas_per_sentence": 0.6,
+        },
+        punctuation_per_1k={"em_dashes": 0.0, "ellipses": 0.8, "spaced_dashes": 2.5},
+        readability={"grade_level": 8.7},
+        intensifiers_per_1k=5,
+        ly_adverbs_per_1k=6,
+    )
+    voice.lexicon = {"phrases": ["at this point", "first things first"], "asides": ["<grin>"]}
+    text = "\n".join(directives(voice, StyleRules()))
+    for phrase in (
+        "24% of the author's sentences are short",
+        "18% are long",
+        "with And, But or So is natural",
+        "few commas (about 0.6",
+        "ellipsis",
+        "spaced dash",
+        "grade 9 reading level",
+        "really, pretty",
+        "few -ly adverbs",
+        "'at this point', 'first things first'",
+        "<grin>",
+    ):
+        assert phrase in text, phrase
+    # With en dashes switched off, the spaced-dash habit is not suggested.
+    assert "spaced dash" not in "\n".join(directives(voice, StyleRules(en_dashes=False)))
+
+
+def test_directives_for_the_opposite_habits():
+    voice = _voice(
+        sentence_rhythm={
+            "short_share": 0.1,
+            "long_share": 0.3,
+            "conjunction_start_share": 0.0,
+            "commas_per_sentence": 2.2,
+        },
+        intensifiers_per_1k=0.5,
+        ly_adverbs_per_1k=20,
+    )
+    text = "\n".join(directives(voice, StyleRules()))
+    for phrase in ("Do not start sentences with And", "comma-rich", "Avoid intensifiers"):
+        assert phrase in text, phrase
+    for phrase in ("ellipsis", "spaced dash", "-ly adverbs", "reading level", "<grin>"):
+        assert phrase not in text, phrase
+
+
+def test_avoid_words_are_asked_for_and_checked():
+    rules = StyleRules(avoid_words=("appears", "consistent with"))
+    voice = Voice(display_name="B", metrics={"sentence_length_words": {"mean": 12}})
+    for told in (directives(voice, rules), directives(Voice(display_name="Plain"), rules)):
+        assert any("appears, consistent with" in line for line in told)
+    assert not any("never writes these" in line for line in directives(voice, StyleRules()))
+    problems = violations("It seems to fit.", "It appears CONSISTENT\nwith the plan.", rules)
+    assert problems == ["reword without words the author never uses: appears, consistent with"]
+    # Even one the original has: taking such words out of a draft is the point,
+    assert violations("It appears so.", "It appears so.", rules)
+    # but a quotation keeps its own words.
+    assert not violations('F5 said "it appears so".', 'F5 said "it appears so".', rules)
+    assert not violations("x", "It disappears.", rules)  # whole words only

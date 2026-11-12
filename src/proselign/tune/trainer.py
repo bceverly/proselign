@@ -23,11 +23,16 @@ from importlib import import_module
 from importlib.util import find_spec
 from pathlib import Path
 
-from proselign.errors import UsageError
+from proselign.errors import ProselignError, UsageError
 from proselign.rewrite.prompt import build_tuned_messages
 
 TARGET_MODULES = ("q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj")
 EXTRAS = ("torch", "transformers", "peft", "bitsandbytes")
+GIB = 1 << 30
+# Activations (with checkpointing), the adapter, its optimizer state, the
+# 4-bit layers' dequantization buffers and the CUDA context, on top of the
+# weights themselves.
+TRAINING_OVERHEAD = 3 * GIB // 2
 
 
 @dataclass
@@ -56,6 +61,56 @@ def require_extras() -> None:
             f"fine-tuning needs {', '.join(missing)}: install the training extras with "
             "pip install 'proselign[tune]' (and a CUDA build of torch)"
         )
+
+
+def memory_needed(config: dict) -> int:
+    """Bytes of GPU memory that training the model ``config`` describes takes,
+    roughly: its linear layers in 4-bit (with their scales), the embeddings
+    and output head in 16-bit, and ``TRAINING_OVERHEAD``."""
+    hidden = int(config.get("hidden_size", 0))
+    heads = int(config.get("num_attention_heads", 0)) or 1
+    head_dim = int(config.get("head_dim") or hidden // heads)
+    kv = int(config.get("num_key_value_heads", heads)) * head_dim
+    layer = (
+        2 * hidden * heads * head_dim  # q, o
+        + 2 * hidden * kv  # k, v
+        + 3 * hidden * int(config.get("intermediate_size", 0))  # gate, up, down
+    )
+    linear = layer * int(config.get("num_hidden_layers", 0))
+    tables = 1 if config.get("tie_word_embeddings") else 2
+    embeddings = tables * int(config.get("vocab_size", 0)) * hidden
+    return int(linear * 0.5625) + embeddings * 2 + TRAINING_OVERHEAD
+
+
+def free_memory() -> tuple[int, int]:  # pragma: no cover - needs a CUDA GPU
+    """Free and total bytes on the GPU training would use."""
+    torch = import_module("torch")
+    if not torch.cuda.is_available():
+        raise UsageError("fine-tuning needs a CUDA GPU; none is available to torch")
+    free, total = torch.cuda.mem_get_info(0)
+    return int(free), int(total)
+
+
+def check_memory(needed: int, free: int, total: int, holders: list[str]) -> None:
+    """Refuse to start training that would run out of GPU memory."""
+    if free >= needed:
+        return
+    if needed > total:
+        raise ProselignError(
+            f"training this base model needs about {needed / GIB:.1f} GiB of GPU memory; "
+            f"the GPU has {total / GIB:.1f} GiB (try a smaller --base and --model)"
+        )
+    held = (
+        f" Ollama still has {', '.join(holders)} loaded (another program asked for it)."
+        if holders
+        else ""
+    )
+    raise ProselignError(
+        f"training needs about {needed / GIB:.1f} GiB of free GPU memory, but only "
+        f"{free / GIB:.1f} of {total / GIB:.1f} GiB is free.{held} Stop whatever is using "
+        "the GPU and run tune again; the training pairs are kept, so it starts training "
+        "straight away"
+    )
 
 
 def chat(pair: dict[str, str]) -> tuple[list[dict[str, str]], str]:

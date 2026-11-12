@@ -469,6 +469,26 @@ def test_list_labels_are_masked():
     assert protect.missing("Period. Your list.", "Your list.")
 
 
+def test_bold_lead_ins_are_masked_whole():
+    text = (
+        "4. **Records of what was deleted.** These are records.\n"
+        "5. **One item-35 module became part of NGINX Plus.** One matches.\n"
+        "**Native form.** It means the thing itself, with **no** copies."
+    )
+    masked, spans = protect.mask(text)
+    assert spans[1::2] == [
+        "**Records of what was deleted.**",
+        "**One item-35 module became part of NGINX Plus.**",
+    ]
+    assert spans[-1] == "**Native form.**"
+    assert "**no**" in masked  # emphasis inside a sentence is not a lead-in
+    # A rewrite that keeps the words but drops the bold is caught.
+    lost = protect.missing(
+        text, text.replace("**Records of what was deleted.**", "Records of what was deleted.")
+    )
+    assert lost and "bold_label" in lost[0]
+
+
 def test_plain_text_headings_stay_as_written():
     text = (
         "5. Intercompany paper and where the IP sits\n- The memo is cited.\n\n"

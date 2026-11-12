@@ -15,7 +15,10 @@ proselign \- learn a writer's prose style and align text to it, locally
 .RB [ \-\-append ]
 .RB [ \-\-min\-words
 .IR N ]
-.IR PATH ...
+.RB [ \-\-offline ]
+.RB [ \-\-config
+.IR FILE " | " \-\-no\-config ]
+.RI { PATH | URL }...
 .br
 .B proselign tune \-\-voice
 .I NAME
@@ -106,9 +109,44 @@ leaves out documents (and mailbox messages) shorter than
 .I N
 words, so the voice is learned from considered writing rather than quick
 notes; an appended voice keeps its threshold.
+.IP
+A
+.I URL
+(http or https) reads writing published on the web. A blog's front page
+reads every post: through the WordPress REST API when the site offers it,
+otherwise through the RSS or Atom feed the page advertises, which may hold
+only recent posts. A feed URL reads every entry in the feed, and any other
+page is read as one article (its
+.B <article>
+or
+.B <main>
+element when it has one). Only the author's running text is kept:
+navigation, headers and footers, comments, tables, figures, block quotes and
+code are left out, and so are lines that read as shell commands or settings
+rather than sentences. Nothing else is crawled. Fetched posts are kept as
+plain text in the voice's directory, so
+.B \-\-append
+re-measures them without going back online, and
+.B delete
+removes them.
+.B \-\-offline
+(or
+.B offline
+in the settings file) refuses any URL that is not on the local machine;
+.B \-\-config
+and
+.B \-\-no\-config
+choose or skip that file, here as for a rewrite.
+.IP
+The measurements cover sentence and paragraph length and how they vary
+(the share of short and of long sentences), commas per sentence, sentences
+opened with And, But or So, contractions, first and second person, passive
+voice, hedges, intensifiers and \-ly adverbs, reading grade level, and
+punctuation habits including ellipses and spaced dashes.
 Besides the measurements, training keeps the author's vocabulary habits
-(preferred words, words never used, frequent sentence openers, serial comma,
-spelling) and up to 200 typical passages, which are shown to the model as
+(preferred words, words never used, frequent sentence openers, three\-word
+phrases the author returns to across documents, recurring asides such as
+<grin>, serial comma, spelling) and up to 200 typical passages, which are shown to the model as
 examples. The passages stay in the local voice store and are left out of
 exports.
 .TP
@@ -284,7 +322,8 @@ matter copied unchanged. Required when the input is a
 .B .docx
 file: its prose is rewritten while styles, headers, footers, tables,
 images and character formatting are kept. Headings, captions, links,
-fields, tracked changes and paragraphs that are not full sentences are
+fields, tracked changes, paragraphs that are not full sentences and
+every paragraph of a table cell with no full stop in it are
 left as they are, and so is a title or cover page (a short first page ending in a
 page or section break), unless
 .B keep_title_page
@@ -363,7 +402,15 @@ to
 .B plural
 (always we/us/our) or
 .B singular
-(I/me/my). Command-line options override environment variables, which
+(I/me/my), and lists in
+.B avoid_words
+words and short phrases never to write (separated by commas or lines):
+the model is told to avoid them, a rewrite that still has one (outside quotations) is sent
+back, and a final pass has the checking model (see
+.BR \-\-judge\-model )
+reword each sentence that still has one, keeping the new sentence only if
+it passes the fidelity checks.
+Command-line options override environment variables, which
 override this file. The file is refused if other users can write to it.
 A commented sample is installed as
 .IR /usr/share/doc/proselign/examples/proselignrc .
@@ -387,6 +434,11 @@ Validation error: a rewrite failed fidelity checks under
 .TP
 .B 5
 Backend error: the inference endpoint is unreachable or replied badly.
+.TP
+.B 6
+Fetch error: a web page given to
+.B train
+cannot be fetched or read.
 .SH EXAMPLES
 .nf
 proselign train \-\-voice Bryan ~/Documents/Writing/
@@ -394,6 +446,7 @@ cat draft.md | proselign \-\-voice Bryan > final.md
 proselign \-\-voice Bryan \-\-strict \-\-strength 0.3 < memo.txt
 proselign \-\-voice Bryan report.docx \-o report\-new.docx
 proselign train \-\-voice BryanMail \-\-min\-words 150 Sent.mbox
+proselign train \-\-voice Bryan \-\-append https://example.com/
 proselign tune \-\-voice Bryan \-\-model qwen2.5:14b\-instruct
 llama\-server \-m model.gguf \-\-port 8080 &
 .fi

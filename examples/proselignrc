@@ -76,3 +76,7 @@ ai_artifact_filter = on
 #   plural   - always "we/us/our", never "I/me/my" (also: we)
 #   singular - "I/me/my" for the author (also: I)
 first_person = voice
+# Words and phrases never to write, separated by commas or on lines of their
+# own (indented).  The model is told to avoid them, a rewrite that still has one
+# (outside quotations) is sent back, and a sentence that has one is reworded.
+#avoid_words = appears, consistent with, rather than

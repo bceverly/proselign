@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from proselign.errors import UsageError, ValidationError
 from proselign.inference.base import Backend
 from proselign.progress import NoProgress
-from proselign.rewrite import protect, review, scoring, style
+from proselign.rewrite import protect, review, scoring, style, wordfix
 from proselign.rewrite.exemplars import Library
 from proselign.rewrite.prompt import build_language_fix, build_messages, build_tuned_messages
 from proselign.rewrite.style import StyleRules
@@ -120,7 +120,7 @@ class Options:  # pylint: disable=too-many-instance-attributes  # one per knob
 
 
 @dataclass
-class Report:
+class Report:  # pylint: disable=too-many-instance-attributes  # one per kind of finding
     """Diagnostics gathered during a run (written to stderr, never stdout)."""
 
     chunks: int = 0
@@ -132,6 +132,8 @@ class Report:
     kept_problems: list[list[str]] = field(default_factory=list)
     style_problems: list[list[str]] = field(default_factory=list)
     reverted: list[list[str]] = field(default_factory=list)  # sentences kept by the review
+    word_fixes: int = 0  # sentences reworded to drop avoided words
+    words_kept: list[list[str]] = field(default_factory=list)  # ones that kept them
     untouched: int = 0  # chunks with nothing that needed work
 
     def merge(self, other: Report) -> None:
@@ -144,6 +146,8 @@ class Report:
         self.kept_problems += other.kept_problems
         self.style_problems += other.style_problems
         self.reverted += other.reverted
+        self.word_fixes += other.word_fixes
+        self.words_kept += other.words_kept
         self.untouched += other.untouched
 
     def summary(self) -> list[str]:
@@ -155,6 +159,7 @@ class Report:
             ("kept the original text of", self.kept_problems, self.unit),
             ("kept the original wording of", self.reverted, "sentence"),
             ("style rules not fully met in", self.style_problems, self.unit),
+            ("kept avoided words in", self.words_kept, "sentence"),
         ):
             if groups:
                 counts: dict[str, int] = {}
@@ -490,7 +495,7 @@ class Rewriter:
         for batch, parts in zip(batches, self._map(Rewriter._batch_job, jobs)):
             for i, part in zip(batch, parts):
                 results[i] = part
-        return self._review(units, results)
+        return self._fix_words(self._review(units, results))
 
     def _batch_job(self, batch: list[str]) -> list[str]:
         """One batch of paragraphs, rewritten together or else one by one."""
@@ -529,8 +534,41 @@ class Rewriter:
         chunks = self._chunks(segment(text, self.options.text_format))
         prose = [seg.text for seg in chunks if seg.prose]
         self.progress.begin(len(prose), "chunks")
-        done = iter(self._review(prose, self._map(Rewriter._chunk_job, prose)))
+        done = iter(self._fix_words(self._review(prose, self._map(Rewriter._chunk_job, prose))))
         return "".join(next(done) if seg.prose else seg.text for seg in chunks)
+
+    def _fix_words(self, texts: list[str]) -> list[str]:
+        """``texts`` after the word-fix pass (see :mod:`wordfix`), which goes
+        to the checker's model when there is one: unlike a fine-tune, it
+        follows an instruction such as "reword without 'appears'"."""
+        rules = self.options.rules
+        todo = [i for i, text in enumerate(texts) if style.avoided(text, rules)]
+        if not todo:
+            return texts
+        self.progress.begin(len(todo), "passages with avoided words")
+        out = list(texts)
+        for i, text in zip(todo, self._map(Rewriter._word_job, [texts[i] for i in todo])):
+            out[i] = text
+        return out
+
+    def _word_job(self, text: str) -> str:
+        outcome = wordfix.fix_words(
+            text,
+            self.options.rules,
+            self.judge or self.backend,
+            self.judge,
+            keep_person=self.options.keep_person,
+            conventions=style.convention_directives(self.voice.lexicon or {}),
+        )
+        self.report.word_fixes += outcome.fixed
+        for sentence, problems in outcome.kept:
+            self.report.words_kept.append(problems)
+            short = sentence if len(sentence) <= 80 else sentence[:77] + "..."
+            self.report.warnings.append(
+                f"kept the avoided words in {short!r}: {_summarize(problems)}"
+            )
+        self.progress.advance()
+        return outcome.text
 
     def _chunk_job(self, text: str) -> str:
         result = self._rewrite_chunk(text)
@@ -574,6 +612,10 @@ class Rewriter:
         if not self.options.review:
             return results
         plans = [review.align(s, r) for s, r in zip(sources, results)]
+        for source, groups in zip(sources, plans):
+            contracted = review.contracted_enough(source, self.voice)
+            for group in groups:
+                group.contracted = contracted
         asks = [group for groups in plans for group in groups if self._screen(group)]
         if asks:
             self.progress.begin(len(asks), "changes checked")
@@ -600,7 +642,7 @@ class Rewriter:
             return False
         rules = self.options.rules
         if self.options.targeted and not any(
-            review.needs_work(unit, self.voice, rules) for unit in group.source
+            review.needs_work(unit, self.voice, rules, group.contracted) for unit in group.source
         ):
             return False  # it already fits the voice: left as written
         group.edited = [review.restore_form(group.before, group.after)]
@@ -701,6 +743,11 @@ _CATEGORIES = (
     ("the rewrite adds ", "sentence added"),
     ("the checker found", "meaning changed"),
     ("placeholder left", "placeholder lost"),
+    ("reword without words", "avoided words"),
+    ("still uses ", "avoided words still there"),
+    ("adds a passive", "passive voice"),
+    ("the reworded sentence was empty", "empty reply"),
+    ("bold_label ", "label lost"),
 )
 
 

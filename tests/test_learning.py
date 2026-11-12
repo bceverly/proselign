@@ -37,7 +37,13 @@ from proselign.rewrite.engine import PROMPT_PARTS, Options, Rewriter
 from proselign.rewrite.exemplars import Library
 from proselign.rewrite.markers import extract_input
 from proselign.rewrite.prompt import build_messages, style_summary
-from proselign.rewrite.scoring import distance, distance_parts, drift, function_word_rates
+from proselign.rewrite.scoring import (
+    GAP_WEIGHT,
+    distance,
+    distance_parts,
+    drift,
+    function_word_rates,
+)
 from proselign.rewrite.style import StyleRules, directives, lexicon_directives
 from proselign.voice.profile import Voice
 
@@ -347,6 +353,16 @@ def test_distance_parts_add_up_to_the_distance():
     assert set(distance_parts(text, Voice(display_name="Empty"))) == set()
 
 
+def test_single_numbers_weigh_half_as_much_as_the_function_words():
+    voice = _measured_voice()
+    # Far off on every single number: tiny words, endless contractions.
+    text = "It's ok. I'm in. We're on. Don't go. Can't stop. It's on. " * 3
+    parts = distance_parts(text, voice)
+    singles = ("sentence length", "word length", "contractions")
+    assert all(parts[k] <= GAP_WEIGHT / len(singles) for k in singles)
+    assert sum(parts[k] for k in singles) <= GAP_WEIGHT
+
+
 def test_evaluate_repeats_report_the_average_and_spread():
     backend = Wavering()
     result = evaluate(_measured_voice(), backend, Options(examples=1), Plan(2, repeats=2))
@@ -450,7 +466,7 @@ def test_control_lines_with_consistent_runs():
 def test_control_lines_when_the_control_already_matches():
     lines = _control_lines({"voice_gain": None, "features_closer_than_control": []})
     assert lines == [
-        "Closer to the author's passages than the control on 0 of 5 features.",
+        "Closer to the author's passages than the control on 0 of 7 features.",
         "The control already matched the author's passages.",
     ]
 

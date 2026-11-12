@@ -7,6 +7,24 @@ parts, `MAJOR.MINOR.PATCH.BUILD`, as in the SysManage projects.
 ## [Unreleased]
 
 ### Added
+- `train` accepts URLs to learn from writing published on the web: a blog's
+  front page reads every post through the WordPress REST API (or else the
+  site's RSS/Atom feed), a feed URL each entry, any other page one article.
+  Only the author's prose is kept (no navigation, comments, quotes, tables,
+  code, or lines that read as commands). Posts are cached privately in the
+  voice's directory so `--append` works offline; `--offline` refuses
+  non-local URLs; a fetch failure exits with the new status 6.
+  `train` takes `--config FILE` and `--no-config` like the other
+  commands, and `proselign --no-config train ...` (settings options before
+  the command) now works instead of being read as a rewrite.
+- Richer voice profiles: sentence rhythm (share of short and long sentences,
+  commas per sentence, sentences opened with And/But/So), hedges,
+  intensifiers, -ly adverbs, Flesch reading ease and grade level, ellipses
+  and spaced dashes; the lexicon adds recurring three-word phrases (counted
+  across documents, never names or topics) and signature asides such as
+  `<grin>`. Each becomes a writing instruction for the model, and `eval`
+  reports commas per sentence and grade level. Retrain a voice to pick
+  them up.
 - M0 command-line contract: `proselign --voice NAME` filter plus `train`,
   `voices`, `inspect`, `export`, `import` and `delete`.
 - Stylometric voice profiles (stdlib only) stored privately under
@@ -34,9 +52,21 @@ parts, `MAJOR.MINOR.PATCH.BUILD`, as in the SysManage projects.
   out.docx` rewrites body and footnote prose while styles, headers, footers,
   tables, images and run formatting (bold, italic, ...) are preserved
   byte for byte. `--output`/`-o` also writes text results to a file.
+  A table cell with no full stop in it is left alone entirely, so labels,
+  figures and column headings are never revoiced.
+- `avoid_words` in `~/.proselignrc` (`[style]`) lists words and short
+  phrases never to write: the model is told to avoid them, a rewrite that
+  still has one (outside quotations) is sent back, and a final pass puts
+  each sentence that still has one to the base model (the checker's, not a
+  fine-tune, which follows such requests poorly) to replace just those
+  words. The new sentence is kept only if it passes the fidelity checks and
+  the checker, so text drafted by a language model loses its tells.
 - `first_person = plural` in `~/.proselignrc` makes every rewrite speak as
   "we/us/our" instead of "I/me/my" (`singular` and `voice` are the other
   choices); stray singular pronouns are sent back for another attempt.
+- A bold lead-in that labels a list item or line (`4. **Records of what
+  was deleted.** These are...`) is never sent to the model, so its markup
+  cannot be dropped; a rewrite that loses one is caught.
 - Markdown rewrites keep headings exactly as written, and training on `.md`
   files measures only the prose, not the markup.
 - Rewrites that drift into another language mid-sentence (a known habit of
@@ -98,6 +128,10 @@ parts, `MAJOR.MINOR.PATCH.BUILD`, as in the SysManage projects.
   every training pair, so the tuned model learns to keep placeholders. The
   pairs are kept with the voice and reused; `--pairs-only` stops after them.
   Training needs the optional extras: `pip install 'proselign[tune]'`.
+  Before loading any weights, `tune` checks that the GPU has room for
+  training (about 11 GiB for a 14B model) and, if not, stops at once and
+  names any model another program has loaded in Ollama; embedding models
+  such as bge-m3 are now unloaded too.
 - `--parallel N` (and `parallel` in `~/.proselignrc`, default 4) sends that
   many chunks to the model at once; a server that runs requests side by side
   (Ollama with `OLLAMA_NUM_PARALLEL=4`) gets through them several times
@@ -122,6 +156,16 @@ parts, `MAJOR.MINOR.PATCH.BUILD`, as in the SysManage projects.
   `--every-sentence` (or `every_sentence = on`) rewrites everything.
 
 ### Changed
+- `eval` of a fine-tuned voice writes the neutral versions and the control
+  rewrite with the untuned base model: the fine-tune kept the author's habits
+  in its "neutral" texts and so overstated how far the voice overshot. Kept
+  neutral versions written by the fine-tune are written again.
+- The style distance weighs sentence length, word length and contractions
+  together at half the weight of the function words (a few contractions
+  could outweigh every function-word habit), and allows contraction rates
+  more room, as they swing between one author's pieces.
+- The review pass asks for contractions only where the text contracts less
+  often than the author, instead of in every sentence that spells one out.
 - Rewrites are several times faster: chunks are about a paragraph (400
   tokens, `--max-chunk-tokens`) instead of 1,500 tokens, so a failed one
   costs little to redo and every request fits a 4,096-token context; a

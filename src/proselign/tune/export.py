@@ -148,21 +148,32 @@ def ollama_root(endpoint: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def loaded_models(endpoint: str) -> list[str]:
+    """The models Ollama has in memory now; none from a server that is not Ollama."""
+    listing = f"{ollama_root(endpoint)}/api/ps"
+    try:
+        with urllib.request.urlopen(listing, timeout=10) as response:  # nosec B310 # nosemgrep
+            return [m["name"] for m in json.loads(response.read()).get("models", [])]
+    except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError):
+        return []
+
+
 def unload_models(endpoint: str) -> list[str]:
     """Ask Ollama to free the GPU (training needs all of it); returns the
     models it unloaded.  A server that is not Ollama is left alone."""
     root = ollama_root(endpoint)
-    try:
-        listing = f"{root}/api/ps"
-        with urllib.request.urlopen(listing, timeout=10) as response:  # nosec B310 # nosemgrep
-            loaded = [m["name"] for m in json.loads(response.read()).get("models", [])]
-        for model in loaded:
-            body = json.dumps({"model": model, "keep_alive": 0}).encode("utf-8")
+    loaded = loaded_models(endpoint)
+    # /api/generate unloads a chat model; an embedding model (bge-m3, ...)
+    # only goes through /api/embed.
+    for route, extra in (("generate", {}), ("embed", {"input": []})):
+        for model in loaded if route == "generate" else loaded_models(endpoint):
+            body = json.dumps({"model": model, "keep_alive": 0, **extra}).encode("utf-8")
             request = urllib.request.Request(  # nosec B310 - the scheme was checked
-                f"{root}/api/generate", body, {"Content-Type": "application/json"}
+                f"{root}/api/{route}", body, {"Content-Type": "application/json"}
             )
-            with urllib.request.urlopen(request, timeout=60):  # nosec B310 # nosemgrep
-                pass
-    except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError):
-        return []
+            try:
+                with urllib.request.urlopen(request, timeout=60):  # nosec B310 # nosemgrep
+                    pass
+            except (OSError, ValueError, urllib.error.URLError):
+                continue
     return loaded

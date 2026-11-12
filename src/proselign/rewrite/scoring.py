@@ -5,8 +5,9 @@
 
 ``distance`` is a Burrows' Delta style measure: the mean relative gap
 between the text's function-word rates and the author's, plus gaps in
-sentence length, word length and contraction rate, each gap capped so no
-single feature dominates a short text.  Lower is closer; it is
+sentence length, word length and contraction rate (together half the
+weight of the function words), each gap capped so no single feature
+dominates a short text.  Lower is closer; it is
 used to choose among several candidate rewrites and by ``proselign eval``.
 ``drift`` turns large, reliable gaps into feedback for another attempt.
 """
@@ -26,11 +27,18 @@ MIN_WORDS_TO_STEER = 80
 STEER_STRENGTH = 0.75
 
 
+# (name, reading, floor): a gap is relative to the author's value plus the
+# floor, so a feature that swings between one author's own pieces (a blog
+# post contracts twice as often as a report) needs a wider margin.
 _GAP_FEATURES = (
-    ("sentence length", lambda m: m["sentence_length_words"]["mean"]),
-    ("word length", lambda m: m["mean_word_length"]),
-    ("contractions", lambda m: m["contractions_per_1k"]),
+    ("sentence length", lambda m: m["sentence_length_words"]["mean"], 2.0),
+    ("word length", lambda m: m["mean_word_length"], 2.0),
+    ("contractions", lambda m: m["contractions_per_1k"], 5.0),
 )
+# The function words are the measure's backbone (Burrows' Delta); the three
+# single numbers together weigh half as much, so a handful of contractions
+# cannot outweigh every function-word habit.
+GAP_WEIGHT = 0.5
 
 
 def _plain(text: str) -> str:
@@ -66,15 +74,14 @@ def distance_parts(text: str, voice: Voice) -> dict[str, float]:
         ) / len(common)
     metrics, wanted = measure(text), voice.metrics or {}
     gaps = {}
-    for name, read in _GAP_FEATURES:
+    for name, read, floor in _GAP_FEATURES:
         try:
             mine, theirs = read(metrics), read(wanted)
         except (KeyError, TypeError):
             continue
         # Capped, so one quirk of a short text (a single contraction) cannot dominate.
-        gaps[name] = min(abs(mine - theirs) / (abs(theirs) + 2.0), 1.0)
-    # The gaps share one unit of weight between them, as the function words do.
-    parts.update({name: gap / len(gaps) for name, gap in gaps.items()})
+        gaps[name] = min(abs(mine - theirs) / (abs(theirs) + floor), 1.0)
+    parts.update({name: GAP_WEIGHT * gap / len(gaps) for name, gap in gaps.items()})
     return parts
 
 

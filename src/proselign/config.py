@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import configparser
 import os
+import re
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,8 @@ from proselign.rewrite.style import StyleRules
 
 CONFIG_NAME = ".proselignrc"
 MAX_CONFIG_BYTES = 64 * 1024
+MAX_AVOID_WORDS = 200
+_AVOID_ENTRY = re.compile(r"[a-z][a-z'\u2019-]*(?: [a-z][a-z'\u2019-]*){0,3}")
 
 _STRINGS = {("rewrite", "voice"), ("backend", "backend"), ("backend", "endpoint")}
 _STRINGS |= {("backend", "model"), ("rewrite", "format"), ("backend", "judge_model")}
@@ -64,6 +67,18 @@ class Config:  # pylint: disable=too-many-instance-attributes  # one per setting
     warnings: list[str] = field(default_factory=list)
 
 
+def avoid_words(value: str) -> tuple[str, ...]:
+    """``avoid_words``: words or short phrases, separated by commas or lines."""
+    entries = [" ".join(e.lower().split()) for e in re.split(r"[,\n]", value)]
+    entries = list(dict.fromkeys(e for e in entries if e))
+    bad = [e for e in entries if not _AVOID_ENTRY.fullmatch(e)]
+    if bad:
+        raise ValueError(f"not a word or phrase: {bad[0]!r} (letters, hyphens, apostrophes)")
+    if len(entries) > MAX_AVOID_WORDS:
+        raise ValueError(f"at most {MAX_AVOID_WORDS} entries")
+    return tuple(entries)
+
+
 def config_path() -> Path:
     """``$PROSELIGN_CONFIG`` if set, else ``~/.proselignrc``."""
     override = os.environ.get("PROSELIGN_CONFIG")
@@ -97,7 +112,7 @@ def load(path: Path | None = None) -> Config:
 
 def _from_parser(parser: configparser.ConfigParser, path: Path) -> Config:
     config = Config(path=path)
-    style: dict[str, bool | str] = {}
+    style: dict[str, object] = {}
     for section in parser.sections():
         for key in parser[section]:
             try:
@@ -110,7 +125,7 @@ def _from_parser(parser: configparser.ConfigParser, path: Path) -> Config:
 
 def _apply(
     config: Config,
-    style: dict[str, bool | str],
+    style: dict[str, object],
     parser: configparser.ConfigParser,
     section: str,
     key: str,
@@ -127,6 +142,8 @@ def _apply(
         config.strength = parser.getfloat(section, key)
     elif section == "style" and key in _STYLE_KEYS:
         style[_STYLE_KEYS[key]] = parser.getboolean(section, key)
+    elif item == ("style", "avoid_words"):
+        style["avoid_words"] = avoid_words(parser.get(section, key))
     elif item == ("style", "first_person"):
         value = parser.get(section, key).strip().lower()
         value = {"we": "plural", "i": "singular"}.get(value, value)

@@ -12,7 +12,8 @@ import pytest
 from proselign.errors import UsageError
 from proselign.ingest import corpus as corpus_mod
 from proselign.ingest.corpus import find_files, load_documents, normalize
-from proselign.ingest.stylometry import describe, measure, split_sentences
+from proselign.ingest.lexicon import build_lexicon
+from proselign.ingest.stylometry import describe, measure, split_sentences, syllables
 from proselign.ingest.train import build_voice
 
 
@@ -162,3 +163,48 @@ def test_mailbox_messages_count_as_documents(tmp_path: Path, monkeypatch):
     skipped: list[str] = []
     assert not load_documents([tmp_path / "Sent.mbox"], lambda path, why: skipped.append(why))
     assert skipped == ["larger than 0 MB"]
+
+
+def test_measure_rhythm_diction_and_readability():
+    text = (
+        "I tried it. And it worked… mostly. But the docs were really, really thin – "
+        "which is pretty typical, honestly, for a project of this size, and I probably "
+        "should have expected that before I started reading the source code at midnight.\n\n"
+        "So I read the code. It was quite clear."
+    )
+    m = measure(text)
+    rhythm = m["sentence_rhythm"]
+    assert m["sentences"] == 5
+    assert rhythm == {
+        "short_share": 0.8,
+        "long_share": 0.2,
+        "conjunction_start_share": 0.6,
+        "commas_per_sentence": 0.8,
+    }
+    assert m["intensifiers_per_1k"] > m["hedges_per_1k"] > 0
+    assert m["ly_adverbs_per_1k"] > 0  # mostly, honestly; never "only"
+    assert m["punctuation_per_1k"]["ellipses"] > 0
+    assert m["punctuation_per_1k"]["spaced_dashes"] > 0
+    assert 0 < m["readability"]["grade_level"] < 12
+    assert m["readability"]["flesch_reading_ease"] > 50
+    assert measure("")["readability"] == {"flesch_reading_ease": 0.0, "grade_level": 0.0}
+    assert [syllables(w) for w in ("cat", "make", "table", "agree", "rhythm")] == [1, 1, 2, 2, 1]
+
+
+def test_lexicon_finds_recurring_phrases_and_asides():
+    documents = [
+        f"At this point I was stuck on part {n}. First things first, I read the Ubuntu "
+        f"Server notes <grin>. Then at this point the build worked."
+        for n in ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten")
+    ]
+    lexicon = build_lexicon("\n\n".join(documents), documents)
+    assert "at this point" in lexicon["phrases"]
+    assert "first things first" in lexicon["phrases"]
+    assert not any("ubuntu" in p or "server" in p for p in lexicon["phrases"])  # names
+    assert not any(p.startswith("this point I") for p in lexicon["phrases"])  # overlaps
+    assert lexicon["asides"] == ["<grin>"]
+    # Too few documents: spread is counted over paragraphs instead.
+    few = build_lexicon(documents[0], documents[:1])
+    assert few["phrases"] == []
+    joined = "\n\n".join(documents)
+    assert "at this point" in build_lexicon(joined, [joined])["phrases"]

@@ -19,10 +19,11 @@ from typing import TextIO
 from proselign import config as config_mod
 from proselign import full_version
 from proselign import progress as progress_mod
-from proselign.errors import EXIT_ERROR, EXIT_OK, ProselignError, UsageError
+from proselign.errors import EXIT_ERROR, EXIT_OK, ProselignError, UsageError, VoiceError
 from proselign.evaluate import NEUTRAL_FILE, Plan, evaluate, load_neutral, report_text, save_neutral
 from proselign.inference import BACKENDS, make_backend
 from proselign.ingest.train import build_voice
+from proselign.ingest.web import WEB_DIR, Fetcher, is_url, save_posts
 from proselign.paths import write_private_file
 from proselign.rewrite.docx import MAX_PACKAGE_BYTES, rewrite_docx
 from proselign.rewrite.engine import CHUNK_TOKENS, Options, Rewriter
@@ -44,6 +45,7 @@ SUBCOMMANDS = (
 
 EPILOG = """examples:
   proselign train --voice Bryan ~/Documents/Writing/
+  proselign train --voice Bryan --append https://example.com/
   cat draft.md | proselign --voice Bryan > final.md
   proselign voices
   proselign export Bryan --output Bryan.proselign
@@ -56,6 +58,14 @@ class _Parser(argparse.ArgumentParser):
 
     def error(self, message: str):  # type: ignore[override]
         raise UsageError(f"{self.prog}: {message}")
+
+
+def _add_config_args(parser: argparse.ArgumentParser) -> None:
+    """``--config`` and ``--no-config``, for every command that reads settings."""
+    parser.add_argument(
+        "--config", type=Path, help="settings file (default: $PROSELIGN_CONFIG or ~/.proselignrc)"
+    )
+    parser.add_argument("--no-config", action="store_true", help="ignore the settings file")
 
 
 def _add_model_args(parser: argparse.ArgumentParser) -> None:
@@ -86,10 +96,7 @@ def _add_model_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         help="rewrites per chunk; the closest to the voice is kept, 1-5 (default 1)",
     )
-    parser.add_argument(
-        "--config", type=Path, help="settings file (default: $PROSELIGN_CONFIG or ~/.proselignrc)"
-    )
-    parser.add_argument("--no-config", action="store_true", help="ignore the settings file")
+    _add_config_args(parser)
     parser.add_argument(
         "--no-tuned",
         action="store_true",
@@ -186,10 +193,14 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument(
         "paths",
         nargs="+",
-        type=Path,
-        help="files or directories (.txt, .md, .docx, .doc, .pdf, .mbox)",
+        metavar="PATH|URL",
+        help="files or directories (.txt, .md, .docx, .doc, .pdf, .mbox), or web pages: "
+        "a blog's front page reads every post, a feed URL every entry in it, any other "
+        "page that one article",
     )
     train.add_argument("--append", action="store_true", help="add to an existing voice")
+    train.add_argument("--offline", action="store_true", help="refuse any non-loopback URL")
+    _add_config_args(train)
     train.add_argument(
         "--min-words",
         type=int,
@@ -425,7 +436,12 @@ def _cmd_train(args: argparse.Namespace, registry: Registry, io: dict) -> int:
     def skipped(path: Path, reason: str) -> None:
         print(f"proselign: warning: skipped {path}: {reason}", file=io["stderr"])
 
-    voice = build_voice(args.voice, args.paths, base, on_skip=skipped, min_words=args.min_words)
+    paths = [Path(p) for p in args.paths if not is_url(p)]
+    origins = _fetch_sources(args, registry, io)
+    paths.extend(origins)
+    voice = build_voice(
+        args.voice, paths, base, on_skip=skipped, min_words=args.min_words, origins=origins
+    )
     path = registry.save(voice)
     summary = voice.corpus_summary
     print(
@@ -434,6 +450,28 @@ def _cmd_train(args: argparse.Namespace, registry: Registry, io: dict) -> int:
         file=io["stderr"],
     )
     return EXIT_OK
+
+
+def _fetch_sources(args: argparse.Namespace, registry: Registry, io: dict) -> dict[Path, str]:
+    """Fetch the URLs among ``train``'s sources into the voice's directory."""
+    urls = [p for p in args.paths if is_url(p)]
+    if not urls:
+        return {}
+    store = registry.path_for(args.voice)
+    if store.is_symlink():
+        raise VoiceError(f"refusing to write into {store}: it is a symbolic link")
+    fetcher = Fetcher(offline=args.offline or _settings(args, io).offline)
+    origins: dict[Path, str] = {}
+    for url in urls:
+        posts = fetcher.posts(url)
+        if posts:
+            origins.update(save_posts(posts, store / WEB_DIR))
+            print(f"proselign: read {len(posts)} post(s) from {url}", file=io["stderr"])
+        else:
+            print(f"proselign: warning: no writing found at {url}", file=io["stderr"])
+    for note in fetcher.notes:
+        print(f"proselign: note: {note}", file=io["stderr"])
+    return origins
 
 
 def _cmd_voices(_args: argparse.Namespace, registry: Registry, io: dict) -> int:
@@ -501,6 +539,25 @@ COMMANDS = {
 }
 
 
+def _subcommand_first(argv: list[str]) -> list[str]:
+    """Move a subcommand named after leading settings options to the front.
+
+    ``proselign --no-config train ...`` (or ``--config FILE train``) means
+    ``proselign train --no-config ...``, not a rewrite of a file called train.
+    """
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--no-config" or argv[i].startswith("--config="):
+            i += 1
+        elif argv[i] == "--config":
+            i += 2
+        else:
+            break
+    if 0 < i < len(argv) and argv[i] in SUBCOMMANDS:
+        return [argv[i], *argv[:i], *argv[i + 1 :]]
+    return argv
+
+
 def main(
     argv: list[str] | None = None,
     stdin: TextIO | None = None,
@@ -515,6 +572,7 @@ def main(
         "stdout": stdout or sys.stdout,
         "stderr": stderr or sys.stderr,
     }
+    argv = _subcommand_first(argv)
     # Bare `proselign --voice X` is the filter: route it to `rewrite`.
     if argv and argv[0] not in SUBCOMMANDS and argv[0] not in ("-h", "--help", "--version"):
         argv.insert(0, "rewrite")

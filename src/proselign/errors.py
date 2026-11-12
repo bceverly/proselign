@@ -13,6 +13,7 @@ EXIT_USAGE = 2
 EXIT_VOICE = 3
 EXIT_VALIDATION = 4
 EXIT_BACKEND = 5
+EXIT_FETCH = 6
 
 
 class ProselignError(Exception):
@@ -43,3 +44,9 @@ class BackendError(ProselignError):
     """The inference backend is unreachable or returned an unusable reply."""
 
     exit_code = EXIT_BACKEND
+
+
+class FetchError(ProselignError):
+    """A web page named as training material cannot be fetched or read."""
+
+    exit_code = EXIT_FETCH

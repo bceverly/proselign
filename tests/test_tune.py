@@ -17,7 +17,8 @@ from types import SimpleNamespace
 import pytest
 
 from proselign import cli
-from proselign.errors import UsageError
+from proselign import evaluate as evaluate_mod
+from proselign.errors import ProselignError, UsageError
 from proselign.evaluate import HELD_OUT, Plan, evaluate, untrained_passages
 from proselign.inference.base import Backend
 from proselign.progress import NoProgress
@@ -133,14 +134,20 @@ class FakeOllama(http.server.BaseHTTPRequestHandler):
 
     seen: list[tuple[str, bytes]] = []
     fail_create = False
+    loaded: list[str] = []
+    embedders = ("bge-m3:latest",)  # only /api/embed unloads these
 
     def do_GET(self):  # pylint: disable=invalid-name  # the http.server API
         self.seen.append(("GET " + self.path, b""))
-        self._reply({"models": [{"name": "qwen2.5:14b-instruct"}]})
+        self._reply({"models": [{"name": name} for name in self.loaded]})
 
     def do_POST(self):  # pylint: disable=invalid-name
         body = self.rfile.read(int(self.headers["Content-Length"]))
         self.seen.append(("POST " + self.path, body))
+        if self.path in ("/api/generate", "/api/embed"):
+            model = json.loads(body)["model"]
+            if (model in self.embedders) == (self.path == "/api/embed"):
+                self.loaded.remove(model)
         if self.path == "/api/create" and self.fail_create:
             self._reply({"error": "no such base"})
         else:
@@ -160,6 +167,7 @@ class FakeOllama(http.server.BaseHTTPRequestHandler):
 @pytest.fixture
 def ollama():
     FakeOllama.seen, FakeOllama.fail_create = [], False
+    FakeOllama.loaded = ["qwen2.5:14b-instruct"]
     server = http.server.HTTPServer(("127.0.0.1", 0), FakeOllama)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -189,11 +197,64 @@ def test_the_adapter_is_registered_through_the_api(ollama, tmp_path: Path):
 
 def test_loaded_models_are_unloaded_before_training(ollama):
     assert export.unload_models(ollama) == ["qwen2.5:14b-instruct"]
-    unload = json.loads(FakeOllama.seen[-1][1])
+    unload = json.loads(FakeOllama.seen[-2][1])
     assert unload == {"model": "qwen2.5:14b-instruct", "keep_alive": 0}
+    assert not FakeOllama.loaded and export.loaded_models(ollama) == []
     assert export.unload_models("http://127.0.0.1:9/v1") == []
+    assert export.loaded_models("http://127.0.0.1:9/v1") == []
     with pytest.raises(UsageError):
         export.ollama_root("file:///etc/passwd")
+
+
+def test_embedding_models_are_unloaded_too(ollama):
+    FakeOllama.loaded = ["aya-expanse:8b", "bge-m3:latest"]
+    assert export.unload_models(ollama) == ["aya-expanse:8b", "bge-m3:latest"]
+    assert not FakeOllama.loaded
+    embed = [json.loads(b) for path, b in FakeOllama.seen if path == "POST /api/embed"]
+    assert embed == [{"model": "bge-m3:latest", "keep_alive": 0, "input": []}]
+
+
+QWEN_14B = {
+    "hidden_size": 5120,
+    "intermediate_size": 13824,
+    "num_hidden_layers": 48,
+    "num_attention_heads": 40,
+    "num_key_value_heads": 8,
+    "vocab_size": 152064,
+    "tie_word_embeddings": False,
+}
+
+
+def test_memory_needed_for_a_14b_model_fits_a_16_gb_card():
+    needed = trainer.memory_needed(QWEN_14B) / trainer.GIB
+    assert 10.5 < needed < 13.5
+    tied = trainer.memory_needed({**QWEN_14B, "tie_word_embeddings": True})
+    assert tied < trainer.memory_needed(QWEN_14B)
+    assert trainer.memory_needed({}) == trainer.TRAINING_OVERHEAD
+
+
+def test_training_refuses_to_start_without_enough_free_memory():
+    gib = trainer.GIB
+    trainer.check_memory(12 * gib, 15 * gib, 16 * gib, [])
+    with pytest.raises(ProselignError, match=r"only 7\.0 of 16\.0 GiB.*aya-expanse:8b loaded"):
+        trainer.check_memory(12 * gib, 7 * gib, 16 * gib, ["aya-expanse:8b"])
+    with pytest.raises(ProselignError) as caught:
+        trainer.check_memory(12 * gib, 7 * gib, 16 * gib, [])
+    assert "loaded" not in str(caught.value) and "pairs are kept" in str(caught.value)
+    with pytest.raises(ProselignError, match="the GPU has 8.0 GiB"):
+        trainer.check_memory(12 * gib, 7 * gib, 8 * gib, [])
+
+
+def test_tune_waits_for_memory_then_names_what_holds_it(monkeypatch):
+    readings = iter([(1, 10), (5, 10)])
+    monkeypatch.setattr(trainer, "free_memory", lambda: next(readings))
+    monkeypatch.setattr(command.time, "sleep", lambda seconds: None)
+    command._wait_for_memory(4, "http://127.0.0.1:9/v1")  # pylint: disable=protected-access
+    monkeypatch.setattr(trainer, "free_memory", lambda: (1, 10))
+    monkeypatch.setattr(command, "MEMORY_WAIT_SECONDS", 0)
+    monkeypatch.setattr(export, "loaded_models", lambda endpoint: ["aya-expanse:8b"])
+    with pytest.raises(ProselignError, match="aya-expanse:8b"):
+        command._wait_for_memory(4, "http://127.0.0.1:9/v1")  # pylint: disable=protected-access
 
 
 class FakeTokenizer:
@@ -269,6 +330,7 @@ def test_tune_runs_every_step_and_records_the_model(trained, tmp_path: Path, mon
 
     monkeypatch.setattr(trainer, "train", fake_train)
     monkeypatch.setattr(export, "unload_models", lambda endpoint: ["qwen2.5:14b-instruct"])
+    monkeypatch.setattr(trainer, "free_memory", lambda: (16 * trainer.GIB, 16 * trainer.GIB))
     monkeypatch.setattr(export, "to_gguf", lambda adapter, config, out: out)
     monkeypatch.setattr(
         export, "register", lambda name, base_model, adapter, endpoint: steps.append(name)
@@ -349,6 +411,38 @@ def test_a_tuned_rewrite_sends_the_short_prompt():
     system, user = backend.prompts[0]
     assert system.content == TUNED_RULES
     assert "Passages the author wrote" not in user.content and "{{1}}" in user.content
+
+
+class RecordsModel(Flattens):
+    """Flattens, noting which model each request asked for."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.models: list[str] = []  # shared by copies, as the eval makes one
+
+    def rewrite(self, messages, temperature):
+        self.models.append(self.model)
+        return super().rewrite(messages, temperature)
+
+
+def test_a_tuned_eval_flattens_and_controls_with_the_base_model():
+    voice = Voice(
+        display_name="B",
+        examples=[f"{p} Variant {n}." for n in range(15) for p in SAMPLE_PARAGRAPHS],
+        tuned={"model": "proselign-b", "base_model": "qwen2.5:14b-instruct"},
+    )
+    backend = RecordsModel()
+    backend.model = "proselign-b"
+    # Neutral versions the fine-tune wrote are not neutral: they are redone.
+    key = evaluate_mod._key  # pylint: disable=protected-access
+    stale = {key(p): {"text": "stale", "model": "proselign-b"} for p in untrained_passages(voice)}
+    result = evaluate(voice, backend, Options(tuned=True), Plan(2, neutral=stale))
+    assert result["neutral_reused"] == 0
+    assert result["neutral_models"] == ["qwen2.5:14b-instruct"]
+    assert backend.models[:2] == ["qwen2.5:14b-instruct"] * 2  # the neutral versions
+    assert "proselign-b" in backend.models  # the voiced rewrite
+    assert backend.models[-1] == "qwen2.5:14b-instruct"  # the control
+    assert backend.model == "proselign-b"
 
 
 def test_a_tuned_voice_is_evaluated_on_passages_it_never_saw():

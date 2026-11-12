@@ -64,7 +64,8 @@ def test_06_world_writable_cwe276_repository_tree():
 def test_07_direct_request_cwe425_no_listening_service():
     """#7 Direct request: proselign exposes no endpoint to request directly --
     it never binds or listens, and only connects to the endpoint the user
-    configured (loopback-only under --offline)."""
+    configured and the URLs given to ``train`` (loopback-only under
+    --offline)."""
     for path, tree in parsed_sources():
         mods = {m.split(".")[0] for m in imported_modules(tree)}
         assert not mods & {"http.server", "socketserver", "asyncio", "xmlrpc"}, path

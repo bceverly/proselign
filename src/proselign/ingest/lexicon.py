@@ -12,7 +12,10 @@ against fixed lists, so it is deterministic and needs no reference corpus:
   "utilize"), when the corpus shows a clear habit;
 * ``avoids``: words language models love that the author never writes;
 * ``openers``: comma-led sentence openers the author keeps returning to;
-* ``conventions``: serial (Oxford) comma and American or British spelling.
+* ``conventions``: serial (Oxford) comma and American or British spelling;
+* ``phrases``: three-word phrases the author returns to across many
+  documents ("at this point", "first things first"), never names or topics;
+* ``asides``: the author's recurring interjections, such as ``<grin>``.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from proselign.ingest.stylometry import split_sentences, words
+from proselign.ingest.stylometry import split_paragraphs, split_sentences, words
 
 FUNCTION_WORDS = (
     "a about after all also an and any are as at be because been but by can could "
@@ -71,10 +74,21 @@ _UK = re.compile(
     re.IGNORECASE,
 )
 MIN_WORDS_FOR_ABSENCE = 5000
+_PHRASE_WORD = re.compile(r"[A-Za-z]+(?:['\u2019][A-Za-z]+)*")
+# Asides in angle brackets or parentheses, and emoticons.
+_ASIDE = re.compile(r"<[a-z]{1,12}>|\((?:grin|g|sigh|smile|lol|wink)\)|[:;]-?[)D]")
+MAX_PHRASES = 8
+MIN_PHRASE_DOCUMENTS = 3
+MIN_ASIDES = 3
+# Below this many documents (one mailbox, a few long files), spread is
+# counted over paragraphs instead.
+MIN_DOCUMENTS_FOR_SPREAD = 10
 
 
-def build_lexicon(text: str) -> dict:
-    """The vocabulary fingerprint of ``text``."""
+def build_lexicon(text: str, documents: list[str] | None = None) -> dict:
+    """The vocabulary fingerprint of ``text``; ``documents`` (the separate
+    pieces ``text`` was joined from) let recurring phrases be told apart from
+    one document's topic."""
     tokens = [w.lower() for w in words(text)]
     total = len(tokens) or 1
     counts = Counter(tokens)
@@ -89,6 +103,8 @@ def build_lexicon(text: str) -> dict:
         ),
         "openers": _openers(text),
         "conventions": _conventions(text),
+        "phrases": _phrases(documents if documents is not None else [text]),
+        "asides": [a for a, n in Counter(_ASIDE.findall(text)).most_common(4) if n >= MIN_ASIDES],
     }
 
 
@@ -121,3 +137,41 @@ def _conventions(text: str) -> dict:
     if us + uk >= 3 and max(us, uk) >= 3 * min(us, uk):
         out["spelling"] = "American" if us > uk else "British"
     return out
+
+
+def _phrases(documents: list[str]) -> list[str]:
+    """Three-word phrases found in many separate documents.
+
+    A phrase with a capitalized word (other than I or a sentence's first
+    word) is a name or a topic, and one made only of function words carries
+    no voice; both are skipped.  A phrase overlapping a more widespread one
+    ("this point I" after "at this point") is skipped too.
+    """
+    if len(documents) >= MIN_DOCUMENTS_FOR_SPREAD:
+        floor = max(MIN_PHRASE_DOCUMENTS, len(documents) // 5)
+    else:
+        documents = [p for d in documents for p in split_paragraphs(d)]
+        floor = max(MIN_PHRASE_DOCUMENTS, len(documents) // 100)
+    function = frozenset(FUNCTION_WORDS)
+    spread: Counter[tuple[str, ...]] = Counter()
+    total: Counter[tuple[str, ...]] = Counter()
+    for document in documents:
+        seen: dict[tuple[str, ...], None] = {}  # ordered: ties go to the first seen
+        for sentence in split_sentences(document):
+            tokens = _PHRASE_WORD.findall(sentence)
+            for i in range(len(tokens) - 2):
+                gram = tokens[i : i + 3]
+                if any(t[0].isupper() and t != "I" and i + j for j, t in enumerate(gram)):
+                    continue
+                lowered = tuple(t.lower() for t in gram)
+                if not set(lowered) <= function and lowered[0] != "to":
+                    seen[lowered] = None
+                    total[lowered] += 1
+        spread.update(seen.keys())
+    kept: list[tuple[str, ...]] = []
+    for gram, count in sorted(spread.items(), key=lambda g: (-g[1], -total[g[0]])):
+        if count < floor or len(kept) == MAX_PHRASES:
+            break
+        if not any(gram[:2] == k[1:] or gram[1:] == k[:2] or gram[1:] == k[1:] for k in kept):
+            kept.append(gram)
+    return [" ".join("I" if t == "i" else t for t in gram) for gram in kept]

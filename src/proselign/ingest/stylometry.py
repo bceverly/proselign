@@ -22,6 +22,23 @@ _PASSIVE_RE = re.compile(
     r"\b(?:is|are|was|were|be|been|being)\s+(?:\w+ly\s+)?\w+(?:ed|en)\b", re.IGNORECASE
 )
 
+_SPACED_DASH_RE = re.compile(r"\w[,.]? (?:\u2013|-{1,2}) \w")
+_ELLIPSIS_RE = re.compile(r"\u2026|\.\.\.")
+_CONJUNCTION_START_RE = re.compile(r"^[\"'(\u201c]?(?:And|But|So|Or|Yet)\b")
+_LY_RE = re.compile(r"\b[a-z]{3,}ly\b")
+_VOWEL_GROUPS = re.compile(r"[aeiouy]+")
+# Not adverbs, though they end in -ly.
+_NOT_LY_ADVERBS = frozenset(
+    {"only", "family", "early", "likely", "apply", "reply", "supply", "rely", "july", "italy"}
+    | {"daily", "weekly", "monthly", "yearly", "friendly", "lovely", "ugly", "holy", "jelly"}
+)
+SHORT_SENTENCE_WORDS = 8
+LONG_SENTENCE_WORDS = 30
+HEDGES = frozenset({"maybe", "perhaps", "probably", "possibly", "arguably", "somewhat", "seems"})
+INTENSIFIERS = frozenset(
+    {"very", "really", "pretty", "quite", "extremely", "totally", "absolutely", "super"}
+)
+
 FIRST_PERSON = frozenset({"i", "me", "my", "mine", "we", "us", "our", "ours"})
 SECOND_PERSON = frozenset({"you", "your", "yours"})
 PUNCTUATION = {
@@ -32,6 +49,7 @@ PUNCTUATION = {
     "questions": "?",
     "parentheses": "(",
 }
+_PATTERN_PUNCTUATION = {"ellipses": _ELLIPSIS_RE, "spaced_dashes": _SPACED_DASH_RE}
 
 
 def split_sentences(text: str) -> list[str]:
@@ -62,6 +80,40 @@ def _distribution(values: list[int]) -> dict[str, float]:
     }
 
 
+def syllables(word: str) -> int:
+    """Approximate syllable count: vowel groups, less a silent final e."""
+    word = word.lower()
+    count = len(_VOWEL_GROUPS.findall(word))
+    if word.endswith("e") and not word.endswith(("le", "ee")) and count > 1:
+        count -= 1
+    return max(count, 1)
+
+
+def _readability(n_words: int, n_sentences: int, tokens: list[str]) -> dict[str, float]:
+    """Flesch reading ease and Flesch-Kincaid grade (higher ease is easier)."""
+    if not n_words or not n_sentences:
+        return {"flesch_reading_ease": 0.0, "grade_level": 0.0}
+    per_sentence = n_words / n_sentences
+    per_word = sum(syllables(w) for w in tokens) / n_words
+    return {
+        "flesch_reading_ease": round(206.835 - 1.015 * per_sentence - 84.6 * per_word, 1),
+        "grade_level": round(0.39 * per_sentence + 11.8 * per_word - 15.59, 1),
+    }
+
+
+def _rhythm(sentences: list[str], lengths: list[int]) -> dict[str, float]:
+    """Shares of short, long and conjunction-led sentences, and comma density."""
+    n = len(sentences) or 1
+    return {
+        "short_share": round(sum(1 for x in lengths if x <= SHORT_SENTENCE_WORDS) / n, 3),
+        "long_share": round(sum(1 for x in lengths if x >= LONG_SENTENCE_WORDS) / n, 3),
+        "conjunction_start_share": round(
+            sum(1 for s in sentences if _CONJUNCTION_START_RE.match(s)) / n, 3
+        ),
+        "commas_per_sentence": round(sum(s.count(",") for s in sentences) / n, 2),
+    }
+
+
 def measure(text: str) -> dict:
     """Compute the stylometric feature set for ``text``."""
     sentences = split_sentences(text)
@@ -70,13 +122,16 @@ def measure(text: str) -> dict:
     lowered = [w.lower() for w in tokens]
     n_words = len(tokens) or 1
     per_1k = 1000.0 / n_words
+    lengths = [len(words(s)) for s in sentences]
 
     counts = Counter(lowered)
+    adverbs = sum(n for w, n in counts.items() if _LY_RE.fullmatch(w) and w not in _NOT_LY_ADVERBS)
     return {
         "words": len(tokens),
         "sentences": len(sentences),
         "paragraphs": len(paragraphs),
-        "sentence_length_words": _distribution([len(words(s)) for s in sentences]),
+        "sentence_length_words": _distribution(lengths),
+        "sentence_rhythm": _rhythm(sentences, lengths),
         "paragraph_length_sentences": _distribution([len(split_sentences(p)) for p in paragraphs]),
         "mean_word_length": round(sum(len(w) for w in tokens) / n_words, 2),
         "type_token_ratio": round(len(counts) / n_words, 3),
@@ -84,8 +139,16 @@ def measure(text: str) -> dict:
         "first_person_per_1k": round(sum(counts[w] for w in FIRST_PERSON) * per_1k, 2),
         "second_person_per_1k": round(sum(counts[w] for w in SECOND_PERSON) * per_1k, 2),
         "passive_per_1k": round(len(_PASSIVE_RE.findall(text)) * per_1k, 2),
+        "hedges_per_1k": round(sum(counts[w] for w in HEDGES) * per_1k, 2),
+        "intensifiers_per_1k": round(sum(counts[w] for w in INTENSIFIERS) * per_1k, 2),
+        "ly_adverbs_per_1k": round(adverbs * per_1k, 2),
+        "readability": _readability(len(tokens), len(sentences), tokens),
         "punctuation_per_1k": {
-            name: round(text.count(char) * per_1k, 2) for name, char in PUNCTUATION.items()
+            **{name: round(text.count(char) * per_1k, 2) for name, char in PUNCTUATION.items()},
+            **{
+                name: round(len(pattern.findall(text)) * per_1k, 2)
+                for name, pattern in _PATTERN_PUNCTUATION.items()
+            },
         },
     }
 

@@ -37,6 +37,7 @@ which ones were.
 from __future__ import annotations
 
 import contextlib
+import copy
 import dataclasses
 import hashlib
 import json
@@ -68,6 +69,8 @@ FEATURES = (
     ("contractions/1k", lambda m: m["contractions_per_1k"]),
     ("first person/1k", lambda m: m["first_person_per_1k"]),
     ("passive/1k", lambda m: m["passive_per_1k"]),
+    ("commas/sentence", lambda m: m["sentence_rhythm"]["commas_per_sentence"]),
+    ("grade level", lambda m: m["readability"]["grade_level"]),
 )
 MAX_REPEATS = 10
 # Passages ``proselign tune`` never trains on, so a tuned voice can still be
@@ -153,7 +156,6 @@ def evaluate(
         targeted=False,
         rules=dataclasses.replace(options.rules, passive_voice=True, first_person="voice"),
     )
-    reused = sum(_key(original) in plan.neutral for original in chosen)
     variants = {"restored": options}
     if plan.ablate:
         variants.update(
@@ -162,10 +164,9 @@ def evaluate(
         )
     per_run = len(chosen) * (len(variants) + plan.control)
     progress.begin(len(chosen) + plan.repeats * per_run, "steps")
-    neutral = []
-    for original in chosen:
-        neutral.append(_neutral_version(backend, original, plan.neutral)["text"])
-        progress.advance()
+    neutral, reused = _neutral_texts(
+        voice, untuned(voice, backend, options), chosen, plan, progress
+    )
     runs = []
     for run in range(plan.repeats):
         with _reseeded(backend, run):
@@ -179,6 +180,22 @@ def evaluate(
         "neutral_reused": reused,
         "neutral_models": sorted({plan.neutral[_key(o)]["model"] for o in chosen}),
     }
+
+
+def _neutral_texts(
+    voice: Voice, flattener: Backend, chosen: list[str], plan: Plan, progress
+) -> tuple[list[str], int]:
+    """The neutral version of each chosen passage, and how many were kept
+    from an earlier run (rather than written now)."""
+    tuned = (voice.tuned or {}).get("model")
+    reused = sum(
+        _key(o) in plan.neutral and plan.neutral[_key(o)].get("model") != tuned for o in chosen
+    )
+    neutral = []
+    for original in chosen:
+        neutral.append(_neutral_version(voice, flattener, original, plan.neutral)["text"])
+        progress.advance()
+    return neutral, reused
 
 
 def untrained_passages(voice: Voice) -> list[str]:
@@ -259,7 +276,12 @@ def _rewrites(  # pylint: disable=too-many-arguments,too-many-positional-argumen
             texts[key].append(Rewriter(held_out, backend, options).rewrite(flat))
             progress.advance()
     if control:
-        plain = Rewriter(_control_voice(), backend, variants["restored"])
+        # Not using the voice means the untuned model too, with no profile.
+        plain = Rewriter(
+            _control_voice(),
+            untuned(voice, backend, variants["restored"]),
+            dataclasses.replace(variants["restored"], tuned=False),
+        )
         texts["control"] = []
         for flat in neutral:
             texts["control"].append(plain.rewrite(flat))
@@ -274,12 +296,28 @@ def _control_voice() -> Voice:
     return Voice(display_name="Original")
 
 
+def untuned(voice: Voice, backend: Backend, options: Options) -> Backend:
+    """``backend`` with the base model the voice was fine-tuned from, when it
+    is running the fine-tune.  The tune is part of the voice, so it must not
+    write the neutral texts (it would keep the author's habits in them) or
+    the control (which stands for not using the voice at all)."""
+    base = (voice.tuned or {}).get("base_model") if options.tuned else None
+    if not base or not hasattr(backend, "model"):
+        return backend
+    plain = copy.copy(backend)
+    plain.model = base  # type: ignore[attr-defined]
+    return plain
+
+
 def _neutral_version(
-    backend: Backend, original: str, neutral: dict[str, dict[str, str]]
+    voice: Voice, backend: Backend, original: str, neutral: dict[str, dict[str, str]]
 ) -> dict[str, str]:
-    """The kept neutral version of ``original``, or a new one, kept from now on."""
+    """The kept neutral version of ``original``, or a new one, kept from now
+    on.  One written by the voice's own fine-tune is not neutral: it is
+    written again."""
     key = _key(original)
-    if key not in neutral:
+    tuned = (voice.tuned or {}).get("model")
+    if key not in neutral or (tuned and neutral[key].get("model") == tuned):
         model = getattr(backend, "model", backend.name)
         neutral[key] = {"text": neutralize(backend, original), "model": model}
     return neutral[key]

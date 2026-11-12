@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass, field
 
 from proselign.inference.base import Message
-from proselign.ingest.stylometry import words
+from proselign.ingest.stylometry import measure, words
 from proselign.rewrite import protect, style
 from proselign.rewrite.markers import make_markers
 from proselign.voice.profile import Voice
@@ -124,6 +124,8 @@ class Group:
     edited: list[str]
     problems: list[str] = field(default_factory=list)
     accepted: bool = False
+    # Whether the whole text already contracts as often as the author.
+    contracted: bool = False
 
     @property
     def before(self) -> str:
@@ -213,10 +215,20 @@ def restore_form(source: str, edited: str) -> str:
     return edited
 
 
-def needs_work(sentence: str, voice: Voice, rules: style.StyleRules) -> list[str]:
+def contracted_enough(text: str, voice: Voice) -> bool:
+    """Whether ``text`` already uses contractions at the author's rate, so a
+    phrase written out in full is the author's habit too, not a lapse."""
+    wanted = (voice.metrics or {}).get("contractions_per_1k", 0)
+    return measure(text)["contractions_per_1k"] >= wanted
+
+
+def needs_work(
+    sentence: str, voice: Voice, rules: style.StyleRules, contracted: bool = False
+) -> list[str]:
     """What, if anything, keeps ``sentence`` from fitting the voice: a broken
     style rule, a sentence far longer than the author writes, or words
-    spelled out by an author who contracts them."""
+    spelled out by an author who contracts them (unless the text around it,
+    ``contracted``, already contracts as often as the author does)."""
     reasons = style.violations("", sentence, rules)
     count = len(words(sentence))
     lengths = (voice.metrics or {}).get("sentence_length_words", {})
@@ -224,7 +236,7 @@ def needs_work(sentence: str, voice: Voice, rules: style.StyleRules) -> list[str
     if mean and count >= MIN_LONG_SENTENCE_WORDS and count > mean + LONG_SENTENCE_STDEVS * spread:
         reasons.append(f"split this {count}-word sentence (the author averages {mean:.0f})")
     contracts = (voice.metrics or {}).get("contractions_per_1k", 0) >= CONTRACTING_AUTHOR
-    if contracts and _EXPANDED_RE.search(_TAG_RE.sub("", sentence)):
+    if contracts and not contracted and _EXPANDED_RE.search(_TAG_RE.sub("", sentence)):
         reasons.append("use contractions as the author does (it's, don't)")
     return reasons
 
@@ -232,8 +244,9 @@ def needs_work(sentence: str, voice: Voice, rules: style.StyleRules) -> list[str
 def flagged(text: str, voice: Voice, rules: style.StyleRules) -> list[tuple[str, list[str]]]:
     """The sentences of ``text`` that need work, with what each needs."""
     found = []
+    contracted = contracted_enough(text, voice)
     for unit in units(text):
-        reasons = needs_work(unit, voice, rules)
+        reasons = needs_work(unit, voice, rules, contracted)
         if reasons:
             found.append((unit.strip(), reasons))
     return found

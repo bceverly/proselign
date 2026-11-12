@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 
 from proselign.rewrite.protect import protected_spans
 from proselign.voice.profile import Voice
@@ -34,6 +35,8 @@ class StyleRules:
     ai_filter: bool = True
     # "voice" follows the profile; "plural" forces we/us/our; "singular" prefers I/me/my.
     first_person: str = "voice"
+    # Words and phrases the user never wants written (``avoid_words``).
+    avoid_words: tuple[str, ...] = ()
 
 
 # Past participles that the passive heuristic would otherwise misread.
@@ -168,6 +171,7 @@ def directives(voice: Voice, rules: StyleRules, omit: frozenset[str] = frozenset
     if not voice.metrics:
         return _keep_style_directives(rules)
     out = [text for group, text in grouped_directives(voice, rules) if group not in omit]
+    out.extend(_avoid_directive(rules))
     if rules.ai_filter:
         out.append(
             "Avoid stock AI phrasing (for example: delve, tapestry, testament to, "
@@ -191,6 +195,7 @@ def grouped_directives(voice: Voice, rules: StyleRules) -> list[tuple[str, str]]
                 "do not shorten the author's sentences on principle.",
             )
         )
+    out.extend(("sentences", text) for text in _rhythm_directives(m.get("sentence_rhythm", {})))
     paragraph = m.get("paragraph_length_sentences", {}).get("mean")
     if paragraph:
         out.append(
@@ -201,8 +206,101 @@ def grouped_directives(voice: Voice, rules: StyleRules) -> list[tuple[str, str]]
         ("punctuation", text)
         for text in _punctuation_directives(m.get("punctuation_per_1k", {}), rules)
     )
+    out.extend(("punctuation", text) for text in _comma_directives(m, rules))
+    out.extend(("vocabulary", text) for text in _diction_directives(m))
     out.extend(("vocabulary", text) for text in lexicon_directives(voice.lexicon or {}))
     return out
+
+
+def _rhythm_directives(rhythm: dict) -> list[str]:
+    """How the author mixes sentence lengths and starts sentences."""
+    out = []
+    short, long_ = rhythm.get("short_share"), rhythm.get("long_share")
+    if short is not None and long_ is not None:
+        out.append(
+            f"About {round(short * 100)}% of the author's sentences are short (8 words or "
+            f"fewer) and {round(long_ * 100)}% are long (30 or more)."
+        )
+    starts = rhythm.get("conjunction_start_share")
+    if starts is not None and starts >= 0.05:
+        out.append(
+            f"Starting a sentence with And, But or So is natural here (about "
+            f"{round(starts * 100)} in 100 sentences)."
+        )
+    elif starts is not None and starts < 0.01:
+        out.append("Do not start sentences with And, But or So.")
+    return out
+
+
+def _comma_directives(m: dict, rules: StyleRules) -> list[str]:
+    """Comma density, ellipses and the author's way of setting off an aside."""
+    out = []
+    commas = m.get("sentence_rhythm", {}).get("commas_per_sentence")
+    if commas is not None and commas < 0.8:
+        out.append(
+            f"Use few commas (about {commas:.1f} per sentence): keep clauses simple rather "
+            "than stringing them together."
+        )
+    elif commas is not None and commas > 1.8:
+        out.append(f"Long, comma-rich sentences are typical (about {commas:.1f} per sentence).")
+    punct = m.get("punctuation_per_1k", {})
+    if punct.get("ellipses", 0) >= 0.5:
+        out.append("An occasional ellipsis (\u2026) for a pause or an aside is characteristic.")
+    em = rules.em_dashes and punct.get("em_dashes", 0) >= 0.5
+    if rules.en_dashes and not em and punct.get("spaced_dashes", 0) >= 1:
+        out.append("For an aside, the author uses a spaced dash ( \u2013 ), not an em dash.")
+    return out
+
+
+def _diction_directives(m: dict) -> list[str]:
+    """Reading level, adverbs and intensifiers."""
+    out = []
+    grade = m.get("readability", {}).get("grade_level")
+    if grade:
+        out.append(f"Write at about a US grade {max(1, round(grade))} reading level.")
+    intensifiers = m.get("intensifiers_per_1k")
+    if intensifiers is not None and intensifiers >= 4:
+        out.append("Intensifiers such as really, pretty and very are part of this voice.")
+    elif intensifiers is not None and intensifiers < 1:
+        out.append("Avoid intensifiers (very, really, extremely).")
+    adverbs = m.get("ly_adverbs_per_1k")
+    if adverbs is not None and adverbs < 8:
+        out.append("Use few -ly adverbs.")
+    return out
+
+
+def _avoid_directive(rules: StyleRules) -> list[str]:
+    if not rules.avoid_words:
+        return []
+    return [
+        "The author never writes these words and phrases; do not use them, and "
+        f"reword any sentence that has one: {', '.join(rules.avoid_words)}."
+    ]
+
+
+@lru_cache(maxsize=8)
+def _avoid_re(entries: tuple[str, ...]) -> re.Pattern[str]:
+    # Longest first, so "consistent with" wins over a shorter entry inside it.
+    alternatives = sorted(entries, key=len, reverse=True)
+    body = "|".join(r"\s+".join(map(re.escape, e.split())) for e in alternatives)
+    return re.compile(rf"\b(?:{body})\b", re.IGNORECASE)
+
+
+def avoid_matches(text: str, rules: StyleRules) -> list[re.Match[str]]:
+    """Where in ``text`` the ``avoid_words`` entries occur (quotations too)."""
+    if not rules.avoid_words:
+        return []
+    return list(_avoid_re(rules.avoid_words).finditer(text))
+
+
+def avoided(text: str, rules: StyleRules) -> list[str]:
+    """The ``avoid_words`` entries found in ``text`` outside quotations and
+    other protected spans, lowercased, in order."""
+    if not rules.avoid_words:
+        return []
+    plain = _strip_protected(text)
+    found = (" ".join(m.lower().split()) for m in _avoid_re(rules.avoid_words).findall(plain))
+    return list(dict.fromkeys(found))
 
 
 def _keep_style_directives(rules: StyleRules) -> list[str]:
@@ -226,11 +324,25 @@ def _keep_style_directives(rules: StyleRules) -> list[str]:
     if not rules.passive_voice:
         out.append(ACTIVE_VOICE)
     out.extend(_person_directives(30.0, rules) if rules.first_person != "voice" else [])
+    out.extend(_avoid_directive(rules))
     if rules.ai_filter:
         out.append(
             "Avoid stock AI phrasing (for example: delve, tapestry, testament to, "
             "it's worth noting, seamlessly, furthermore, moreover, in conclusion)."
         )
+    return out
+
+
+def convention_directives(lexicon: dict) -> list[str]:
+    """The author's serial-comma and spelling habits, as instructions."""
+    conventions = lexicon.get("conventions", {})
+    out = []
+    if conventions.get("serial_comma") is True:
+        out.append("Use the serial (Oxford) comma: 'red, white, and blue'.")
+    elif conventions.get("serial_comma") is False:
+        out.append("No serial comma: 'red, white and blue'.")
+    if conventions.get("spelling"):
+        out.append(f"Use {conventions['spelling']} spelling.")
     return out
 
 
@@ -248,13 +360,16 @@ def lexicon_directives(lexicon: dict) -> list[str]:
     if openers:
         quoted = ", ".join(f"'{o},'" for o in openers)
         out.append(f"Sentence openers the author often uses, where they fit: {quoted}.")
-    conventions = lexicon.get("conventions", {})
-    if conventions.get("serial_comma") is True:
-        out.append("Use the serial (Oxford) comma: 'red, white, and blue'.")
-    elif conventions.get("serial_comma") is False:
-        out.append("No serial comma: 'red, white and blue'.")
-    if conventions.get("spelling"):
-        out.append(f"Use {conventions['spelling']} spelling.")
+    out.extend(convention_directives(lexicon))
+    phrases = lexicon.get("phrases", [])[:8]
+    if phrases:
+        quoted = ", ".join(f"'{p}'" for p in phrases)
+        out.append(f"Phrases the author keeps returning to, where they fit naturally: {quoted}.")
+    asides = lexicon.get("asides", [])[:3]
+    if asides:
+        out.append(
+            f"The author's own asides, used sparingly where the tone allows: {', '.join(asides)}."
+        )
     return out
 
 
@@ -481,4 +596,10 @@ def violations(source: str, candidate: str, rules: StyleRules) -> list[str]:
         found = sorted({p.lower() for p in _AI_PHRASE_RE.findall(plain)} - allowed)
         if found:
             problems.append(f"replace stock AI phrasing: {', '.join(found)}")
+    # Unlike stock phrasing, an avoided word counts even when the original has
+    # it: removing the author's non-words from a draft is the point.  Quoted
+    # and other protected text was taken out of ``plain`` above.
+    unwanted = avoided(plain, rules)
+    if unwanted:
+        problems.append(f"reword without words the author never uses: {', '.join(unwanted)}")
     return problems

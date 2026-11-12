@@ -87,6 +87,8 @@ sudo systemctl restart ollama</code></pre>
       <h2 id="quickstart">Quick start</h2>
 <pre class="code"><code># 1. Learn a voice from your own documents (.txt, .md, .docx, .doc, .pdf, .mbox)
 proselign train --voice Bryan ~/Documents/Writing/
+#    ... and from your blog (every post, read once and kept locally)
+proselign train --voice Bryan --append https://example.com/
 
 # 2. Rewrite: stdout carries the result and nothing else
 cat draft.md | proselign --voice Bryan &gt; final.md
@@ -102,6 +104,7 @@ proselign --voice Bryan --strict --strength 0.3 &lt; contract-summary.md</code><
           <tbody>
             <tr><td><code>proselign --voice NAME [FILE...]</code></td><td>Rewrite stdin (or files; <code>-</code> is stdin) in a voice. Same as <code>proselign rewrite</code>.</td></tr>
             <tr><td><code>proselign train --voice NAME PATH...</code></td><td>Learn a voice from <code>.txt</code>, <code>.md</code>, <code>.docx</code>, <code>.doc</code> (Word 6 through 2003) and <code>.pdf</code> files, and <code>.mbox</code> mailboxes of mail you sent (each message is a document; quoted replies, forwards, signatures and attachments are left out); unreadable files are skipped with a warning. <code>--append</code> re-learns with additional documents. <code>--min-words N</code> leaves out documents and messages shorter than N words, to learn from considered writing rather than quick notes.</td></tr>
+            <tr><td><code>proselign train --voice NAME URL...</code></td><td>Learn from writing published on the web. A blog's front page reads every post (through the WordPress REST API, or else the RSS or Atom feed the site advertises, which may hold only recent posts); a feed URL reads each entry; any other page is read as one article. Navigation, comments, block quotes, tables and code are left out, and so are lines that read as shell commands or settings. Fetched posts are kept as text in the voice's directory, so <code>--append</code> works offline afterwards. <code>--offline</code> refuses non-local URLs. URLs and paths can be mixed.</td></tr>
             <tr><td><code>proselign tune --voice NAME</code></td><td>Fine-tune a model on the voice (see <a href="#tune">Fine-tuning</a>). Rewrites and <code>eval</code> in that voice then use the tuned model; <code>--no-tuned</code> compares without it.</td></tr>
             <tr><td><code>proselign eval --voice NAME</code></td><td>Round-trip sample passages through neutral prose and back, and report how much of the gap to the author's own writing the rewrite closed. Accepts the rewrite options, so models (<code>--model</code>) and settings (<code>--examples</code>, <code>--candidates</code>) can be compared. Settings that depart from the author's habits on purpose (<code>passive_voice = off</code>, a forced <code>first_person</code>) are set aside for the measurement. The neutral versions are kept with the voice (never exported) and reused, so every model starts from the same texts; <code>--fresh</code> writes new ones. Because any rewrite changes wording, the same texts are also rewritten with no voice as a control, and the report shows how much closer the voice came than the control (<code>--no-control</code> skips it). <code>--repeats N</code> averages N runs and shows their range, to tell a real difference from noise; a second table shows what each feature contributes to the distance. <code>--ablate</code> rewrites again without each part of the voice in turn (sentence length, contractions, person, passive voice, word length, punctuation, vocabulary, tone, the example passages, the steering feedback) and reports which parts help and which hurt.</td></tr>
             <tr><td><code>proselign voices</code></td><td>List voices: id, name, document count (tab-separated).</td></tr>
@@ -152,6 +155,7 @@ proselign --voice Bryan --strict --strength 0.3 &lt; contract-summary.md</code><
             <tr><td><code>3</code></td><td>Voice error: unknown, invalid or conflicting voice.</td></tr>
             <tr><td><code>4</code></td><td>Validation error: a rewrite failed fidelity checks under <code>--strict</code>.</td></tr>
             <tr><td><code>5</code></td><td>Backend error: the endpoint is unreachable or replied badly.</td></tr>
+            <tr><td><code>6</code></td><td>Fetch error: a web page given to <code>train</code> cannot be fetched or read.</td></tr>
           </tbody>
         </table>
       </div>
@@ -161,7 +165,7 @@ proselign --voice Bryan --strict --strength 0.3 &lt; contract-summary.md</code><
 
       <h2 id="docx">Word documents</h2>
       <p><code>proselign --voice Bryan report.docx -o report-rewritten.docx</code> rewrites the prose of a Word document and leaves everything else as it was: styles, numbering, headers and footers, tables, images, comments and section settings are copied byte for byte. Only the body text and footnotes are edited, one paragraph at a time, and bold, italic and other formatting inside a paragraph travels with the words it marks.</p>
-      <p>A title or cover page is left completely alone: a cover page inserted from Word's gallery, or a short first page (under 250 words) that ends in a page or section break (<code>keep_title_page = off</code> in <code>~/.proselignrc</code> rewrites it too). Elsewhere, a paragraph is left alone when it is a heading, title, caption or table of contents entry; when it is not a full sentence (subject lines, labels, most table cells); or when it holds fields, links, images, tabs, line breaks, hidden text or tracked changes. A summary of what was rewritten and what was kept goes to stderr. The original file is never overwritten.</p>
+      <p>A title or cover page is left completely alone: a cover page inserted from Word's gallery, or a short first page (under 250 words) that ends in a page or section break (<code>keep_title_page = off</code> in <code>~/.proselignrc</code> rewrites it too). Elsewhere, a paragraph is left alone when it is a heading, title, caption or table of contents entry; when it is not a full sentence (subject lines, labels, most table cells); when it sits in a table cell with no full stop anywhere in it (labels, figures and column headings, even a line ending in ? or !); or when it holds fields, links, images, tabs, line breaks, hidden text or tracked changes. A summary of what was rewritten and what was kept goes to stderr. The original file is never overwritten.</p>
 
       <h2 id="fidelity">Fidelity checks</h2>
       <p>Before a chunk is rewritten, Proselign records its protected tokens: numbers and currency, percentages, document identifiers such as Bates numbers, URLs, e-mail addresses, quotations, citations like <code>[3]</code>, list labels and inline code. The model never sees them: each is sent as a placeholder such as <code>{{3}}</code> and put back afterwards. After the rewrite, every token must still be present as many times as before, and so must every name and acronym, every negation and modal verb (<em>not</em>, <em>never</em>, <em>may</em>, <em>will</em>, <em>could</em>), and every sentence: one dropped, or one added that the original has nothing like, fails the check, as does a rewrite far longer or shorter than the original or one that changes who is speaking or addressed. A comma or full stop that the model moves across a closing quote mark is put back first. A rewrite that slips into another writing system (for example Chinese in an English document) has the stray fragment translated back on the fly. Any other failure is retried with the specific problems as feedback; if retries fail, the original text is kept and a warning goes to stderr, or with <code>--strict</code> the run fails with exit status 4.</p>
@@ -225,12 +229,13 @@ em_dashes = off          # the model rephrases; commas as a last resort
 exclamation_marks = on
 semicolons = on
 ai_artifact_filter = on  # preambles, sign-offs, stock phrasing, curly quotes
-first_person = plural    # "we/us/our", never "I/me/my" (voice, plural or singular)</code></pre>
+first_person = plural    # "we/us/our", never "I/me/my" (voice, plural or singular)
+avoid_words = appears, consistent with, rather than   # never written; sentences with them are reworded</code></pre>
       <p>Rules the model can break are checked after every attempt and fed back for another try; punctuation still left at the end is replaced mechanically. Quotations, inline code, URLs and e-mail addresses are never altered.</p>
 
       <h2 id="security">Security &amp; privacy</h2>
       <ul>
-        <li><strong>No telemetry, no network by default.</strong> The only connection Proselign makes is to the endpoint you configure; <code>--offline</code> restricts that to loopback.</li>
+        <li><strong>No telemetry, no network by default.</strong> The only connections Proselign makes are to the endpoint you configure and, when you give <code>train</code> a URL, to that site; <code>--offline</code> restricts both to loopback.</li>
         <li><strong>Documents are data, never instructions.</strong> Ingested text and text being rewritten are delimited with per-request random markers, so embedded "instructions" cannot escape into the prompt.</li>
         <li><strong>Private storage.</strong> The voice store is created 0700 and manifests 0600 regardless of your umask; writes never follow symbolic links.</li>
         <li><strong>Symlinks are not followed</strong> when walking a corpus directory.</li>

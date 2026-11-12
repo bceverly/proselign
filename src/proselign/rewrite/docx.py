@@ -13,7 +13,7 @@ A paragraph is rewritten when it is plain runs of text.  Headings, titles,
 captions, tables of contents, hidden text and paragraphs holding fields,
 links, images, line breaks, tabs or tracked changes are left exactly as
 they are, as are paragraphs that are not full sentences (subject lines, labels,
-table cells).  Character
+table cells) and every paragraph of a table cell with no full stop in it.  Character
 formatting inside a paragraph (bold, italic, ...) is carried through the
 model as ``<s1>...</s1>`` tags around the affected words.
 """
@@ -150,8 +150,19 @@ def _collect(tokens, ends, report: DocxReport, keep_title_page: bool) -> list[_P
     """Every paragraph that may be rewritten, in document order."""
     title = _title_page(tokens, ends) if keep_title_page else set()
     paragraphs = []
+    cell_end = -1  # end of the table cell being left out, if any
     for i, token in enumerate(tokens):
-        if _name(token) == "w:p" and not token.startswith("</") and ends[i] > i:
+        opens = not token.startswith("</") and ends[i] > i
+        if _name(token) == "w:tc" and opens and i > cell_end:
+            # A cell with no full stop anywhere holds labels, figures or
+            # headings, not prose, even when a line ends with ? or !.
+            if "." not in _text_of(tokens, i, ends[i]):
+                cell_end = ends[i]
+        if _name(token) == "w:p" and opens:
+            if i < cell_end:
+                if _text_of(tokens, i, ends[i]).strip():
+                    _skip(report, "table cell without a full stop")
+                continue
             if i in title:
                 if _text_of(tokens, i, ends[i]).strip():
                     _skip(report, "title page")

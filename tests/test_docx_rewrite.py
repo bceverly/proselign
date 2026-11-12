@@ -399,3 +399,39 @@ def test_cli_keep_title_page_setting(trained, tmp_path: Path, monkeypatch):
     assert "title page" in run(argv, registry=trained)[2]
     monkeypatch.setenv("PROSELIGN_CONFIG", str(rc))
     assert "title page" not in run(argv, registry=trained)[2]
+
+
+def _cell(*paragraphs: str) -> str:
+    return f"<w:tc><w:tcPr><w:tcW w:w=\"2000\"/></w:tcPr>{''.join(paragraphs)}</w:tc>"
+
+
+def test_table_cells_without_a_full_stop_are_left_alone():
+    label = "Quarterly revenue by region and product line"
+    question = "Who owns the rollout plan for each of these regions?"
+    prose = "Each region reports its own figures before the review"
+    table = (
+        "<w:tbl><w:tr>"
+        + _cell(_p(_r(label)))
+        + _cell(_p(_r(question)), _p(_r("Ask the regional leads first!")))
+        + _cell(_p(_r(SENTENCE)))
+        + _cell(_p(_r(prose)), _p(_r("Done.")))
+        + _cell(_p())  # an empty cell is not counted
+        + "</w:tr></w:tbl>"
+    )
+    result, report = rewrite_docx(_docx(table + _p(_r(SENTENCE))), _upper)
+    text = docx_text(result)
+    assert label in text and question in text and "Ask the regional leads first!" in text
+    assert report.kept["table cell without a full stop"] == 3
+    # A cell with a full stop follows the usual rules, paragraph by paragraph.
+    assert text.count(SENTENCE.upper()) == 2
+    # ... so a cell's unfinished line still needs a sentence ending of its own.
+    assert prose in text and report.kept["not full sentences (titles, labels, table cells)"] == 2
+
+
+def test_a_nested_table_cell_is_judged_on_its_own():
+    inner = "<w:tbl><w:tr>" + _cell(_p(_r("Name of the person who signs off"))) + "</w:tr></w:tbl>"
+    outer = "<w:tbl><w:tr>" + _cell(_p(_r(SENTENCE)), inner) + "</w:tr></w:tbl>"
+    result, report = rewrite_docx(_docx(outer), _upper)
+    assert "Name of the person who signs off" in docx_text(result)
+    assert SENTENCE.upper() in docx_text(result)
+    assert report.kept["table cell without a full stop"] == 1

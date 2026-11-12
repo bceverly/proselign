@@ -23,6 +23,11 @@ _PATTERNS = {
     "url": re.compile(r"\b(?:https?|ftp)://[^\s<>()\[\]]+[^\s<>()\[\].,;:!?'\"]"),
     "email": re.compile(r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b"),
     "quotation": re.compile(r"\"[^\"\n]{1,400}\"|“[^”\n]{1,400}”"),
+    # A bold lead-in at the start of a line or list item ("4. **Records of
+    # what was deleted.** These are..."): models drop its markup.
+    "bold_label": re.compile(
+        r"(?m)(?:(?<=^\d\. )|(?<=^\d\d\. )|(?<=^[-*+] )|^)\*\*[^*\n]{1,160}\*\*(?= )"
+    ),
     "citation": re.compile(r"(?<!\[)\[\d+(?:[,–-]\s*\d+)*\](?!\])|\[@[\w:-]+\]"),
     # Thousands separators only between digits: "42, all" is the number 42.
     # Paragraph markers and formatting tags used when rewriting .docx files.
@@ -209,7 +214,7 @@ def sentence_changes(source: str, rewrite: str) -> list[str]:
 
 
 # Spans that style fixes must leave byte for byte as they are.
-_VERBATIM_KINDS = ("inline_code", "url", "email", "quotation", "markup")
+_VERBATIM_KINDS = ("inline_code", "url", "email", "quotation", "bold_label", "markup")
 
 
 def protected_spans(text: str) -> list[tuple[int, int]]:
@@ -233,6 +238,7 @@ _MASKED_KINDS = (
     "url",
     "email",
     "quotation",
+    "bold_label",  # before numbers, which may sit inside one
     "citation",
     "identifier",
     "number",

@@ -165,3 +165,14 @@ def test_first_person_setting_rejects_nonsense(tmp_path: Path):
     path = _rc(tmp_path, "[style]\nfirst_person = they\n")
     with pytest.raises(UsageError, match="plural"):
         config_mod.load(path)
+
+
+def test_avoid_words_setting(tmp_path: Path):
+    text = "[style]\navoid_words = appears, Consistent  With,\n  rather than\n  appears\n"
+    settings = config_mod.load(_rc(tmp_path, text))
+    assert settings.rules.avoid_words == ("appears", "consistent with", "rather than")
+    with pytest.raises(UsageError, match="not a word or phrase"):
+        config_mod.load(_rc(tmp_path, "[style]\navoid_words = fine, c++\n"))
+    many = ", ".join(f"word{chr(97 + n // 26)}{chr(97 + n % 26)}" for n in range(201))
+    with pytest.raises(UsageError, match="at most 200"):
+        config_mod.load(_rc(tmp_path, f"[style]\navoid_words = {many}\n"))
