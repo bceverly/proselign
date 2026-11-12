@@ -146,3 +146,11 @@ def test_the_authors_conventions_reach_the_fixer():
         "The author's conventions: No serial comma: 'red, white and blue'."
     )
     assert "conventions" not in build_word_fix("It appears so.", ["appears"])[0].content
+
+
+def test_without_a_checker_the_fixer_model_rewords():
+    voice = Voice(display_name="B", metrics={"sentence_length_words": {"mean": 12, "stdev": 4}})
+    fixer = Fixer({"appears": "looks"})
+    rewriter = Rewriter(voice, Echo(), Options(rules=RULES), fixer=fixer)
+    assert rewriter.rewrite("The log appears complete.\n") == "The log looks complete.\n"
+    assert len(fixer.asked) == 1  # not the voice model, which only echoes

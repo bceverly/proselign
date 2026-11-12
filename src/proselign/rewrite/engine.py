@@ -281,6 +281,7 @@ class Rewriter:
         backend: Backend,
         options: Options | None = None,
         judge: Backend | None = None,
+        fixer: Backend | None = None,
     ) -> None:
         self.voice = voice
         self.backend = backend
@@ -288,6 +289,9 @@ class Rewriter:
         # The model asked whether each change keeps the meaning (with
         # ``Options.review``); without one, only the rule checks apply.
         self.judge = judge
+        # The model that rewords sentences still using avoided words: the
+        # checker's when there is one, else ``fixer``, else the voice's own.
+        self.fixer = fixer
         self._rejected: str | None = None  # the last attempt's failed rewrite
         self.report = Report()
         self.progress = NoProgress()  # the CLI swaps in a visible one
@@ -555,7 +559,7 @@ class Rewriter:
         outcome = wordfix.fix_words(
             text,
             self.options.rules,
-            self.judge or self.backend,
+            self.judge or self.fixer or self.backend,
             self.judge,
             keep_person=self.options.keep_person,
             conventions=style.convention_directives(self.voice.lexicon or {}),

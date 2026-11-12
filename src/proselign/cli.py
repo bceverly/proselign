@@ -20,7 +20,15 @@ from proselign import config as config_mod
 from proselign import full_version
 from proselign import progress as progress_mod
 from proselign.errors import EXIT_ERROR, EXIT_OK, ProselignError, UsageError, VoiceError
-from proselign.evaluate import NEUTRAL_FILE, Plan, evaluate, load_neutral, report_text, save_neutral
+from proselign.evaluate import (
+    NEUTRAL_FILE,
+    Plan,
+    evaluate,
+    load_neutral,
+    report_text,
+    save_neutral,
+    untuned,
+)
 from proselign.inference import BACKENDS, make_backend
 from proselign.ingest.train import build_voice
 from proselign.ingest.web import WEB_DIR, Fetcher, is_url, save_posts
@@ -358,7 +366,8 @@ def _cmd_eval(args: argparse.Namespace, registry: Registry, io: dict) -> int:
 
 def _cmd_rewrite(args: argparse.Namespace, registry: Registry, io: dict) -> int:
     settings, voice, options, backend = _setup(args, registry, io)
-    rewriter = Rewriter(voice, backend, options, _judge(args, settings, voice, options, backend))
+    judge = _judge(args, settings, voice, options, backend)
+    rewriter = Rewriter(voice, backend, options, judge, fixer=untuned(voice, backend, options))
     rewriter.progress = _progress(args, settings, io)
     try:
         if any(path.suffix.lower() == ".docx" for path in args.files):

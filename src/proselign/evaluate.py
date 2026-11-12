@@ -273,7 +273,8 @@ def _rewrites(  # pylint: disable=too-many-arguments,too-many-positional-argumen
             held_out = dataclasses.replace(
                 voice, examples=[e for e in voice.examples if e != original]
             )
-            texts[key].append(Rewriter(held_out, backend, options).rewrite(flat))
+            fixer = untuned(voice, backend, options)  # as the CLI's checker model would
+            texts[key].append(Rewriter(held_out, backend, options, fixer=fixer).rewrite(flat))
             progress.advance()
     if control:
         # Not using the voice means the untuned model too, with no profile.
